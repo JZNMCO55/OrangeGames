@@ -24,4 +24,8 @@ Orange-Ecosystem/
 
 ## 当前状态
 
-仓建立于 2026-05-24。第一款游戏（Ori-like 平台跳跃，流体/史莱姆主角）尚未开工。
+仓建立于 2026-05-24。第一款游戏（Ori-like 平台跳跃，流体/史莱姆主角）处于**原型 / Spike 阶段**：
+
+- **设计**：首游宪法 + 脊柱已定（[`prototypes/phase0-pillars.md`](prototypes/phase0-pillars.md)）；Spike 1 手感执行规格见 [`prototypes/spike-01-blob-feel.md`](prototypes/spike-01-blob-feel.md)。
+- **代码**：消费骨架已立（`find_package(OrangeEngine)` + 开窗 + debug draw），见 [`prototypes/spike-01-blob/`](prototypes/spike-01-blob/) 与构建说明 [`docs/building.md`](docs/building.md)。手感 Loop A / 软体 blob 尚未落地。
+- **当前阻塞**：Spike 调参面板需引擎补完消费者 ImGui hook（OrangeEngine `GAP-2026-05-27-consumer-imgui-tuning-hook`）；运行还需 workaround 引擎 builtin shader 未 install（`GAP-2026-05-27-builtin-shaders-not-installed-for-consumers`）。下一步是独立 OrangeEngine session 补这两条，再回来接真 slider 续 Spike。

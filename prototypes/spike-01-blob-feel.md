@@ -1,8 +1,10 @@
 # Spike 1 — 流体史莱姆 context-sensitive 手感
 
-> 状态：**设计已定，代码未开工**。本文件是下次 OrangeGames code session 的执行规格。
+> 状态：**消费骨架已立，手感本体未开工**。本文件是 OrangeGames code session 的执行规格。
 > 记录日期：2026-05-26。归属：OrangeGames 首游（Ori-like 平台跳跃，流体/史莱姆主角）原型阶段 Phase 1 spike。
 > 上位设计宪法见 [`phase0-pillars.md`](phase0-pillars.md)（spine = 形态切换 / 战斗；流体 = 本体 + 所有形态共用的穿行地基）。
+
+> **执行状态（2026-05-27）**：已搭可编消费骨架（[`spike-01-blob/`](spike-01-blob/)：`find_package(OrangeEngine)` + 开窗 + debug draw 勾场景轮廓；构建见 [`../docs/building.md`](../docs/building.md)）。核对引擎公共面后发现**调参面板撞引擎缺口**——下文方法论列为"第一优先级地基"的 ImGui 热重载面板，引擎公共面无消费者 hook（已登记 OrangeEngine `GAP-2026-05-27-consumer-imgui-tuning-hook`）；另发现 builtin shader 未 install（`GAP-2026-05-27-builtin-shaders-not-installed-for-consumers`，已 workaround）。**用户拍板下一步：独立 OrangeEngine session 先补 ImGui hook，再回来用真 slider 续 Spike（Loop A → Loop B）。** 所以下文"地基 #1 热重载调参面板"暂挂起，其余执行方法论不变。
 
 ---
 
@@ -59,12 +61,53 @@ gameplay 真相在隐藏点、玩家眼睛却在看果冻 → 当**果冻和 con
 
 ---
 
-## 执行方法论：先 baseline，后加档
+## 执行方法论：手感调试怎么展开
+
+**心态校正（渲染工程师专属坑）**：手感调试不是"凭感觉一直拧"，是一个**可测量、可复现、有 stop 条件**的工程过程。不这么搞会在"再调一点点"里耗掉好几周还收敛不了。
+
+### 核心：因为做了分层，调试拆成两个独立循环
+
+gameplay 真相（control point）和视觉（blob）已分层 → 手感调试**不是去调"软体手感"**（无底洞），而是拆成两个互不干扰的循环：
+
+- **循环 A —— 把 control point 当刚体调到跟手**（blob 先关掉 / 只画 debug 框）。调的是标准平台跳跃手感，与软体无关。
+- **循环 B —— 挂上 blob，只调视觉耦合**（弹簧硬度 / 阻尼 / apex 分叉）。不碰 gameplay 数值，只管"果冻跟得对不对、骗不骗人"。
+
+> **A 没调好之前绝不碰 B。** 否则会把"控制发肉"错怪到"软体太软"，两个变量缠在一起理不清。
+
+### 地基（开调前一次性投入，回报最高）
+
+1. **热重载调参面板**：把下方旋钮清单全接到 **Dear ImGui**（OrangeEngine 已 vendor）的 slider 上，**边玩边拧、不重编**。这一项让调试快 10 倍——手感靠连续手感记忆调，"改值→重编→重启→走回测试点"会扯断那根线。开 spike 第一件搭的东西，比 blob 本身还优先。
+2. **固定时间步长物理**：手感与 sim 稳定性都要求物理跑固定步长（如 60Hz）、与渲染帧率解耦；变步长会让手感随帧率漂、blob 易炸。Box2D 桥接通常已是固定步长，开 spike 时进 `samples/06_physics_platformer` 确认。
+3. **sim 先稳再调手感**：blob 在会遇到的速度范围（快落 / 起跳）里不能炸。PBD 约束迭代次数 / 子步是调手感的**前置条件**——会爆的 blob 没法谈手感。
+
+### 循环 A 调参顺序（平台跳跃有依赖链，别跳步）
+
+**一次只动一个旋钮**，改完跑同一套固定测试路线对比：
+
+1. **地面移动**：加速度 / 减速度 / 最大速度——先让走/跑跟手（判据 #1 延迟在这关）。
+2. **跳跃**：起跳冲量 / 重力 / 可变跳跃高度（松手切断上升）/ apex 重力衰减。
+3. **juice 辅助**：coyote time / jump buffer / corner correction——建立在 2 之上，跳跃没调对前调它们没意义。
+
+**别从零发明手感**：没调过平台跳跃就**抄参考数值**——Celeste（coyote ~5 帧、jump buffer ~6 帧是经典起点）/ Super Meat Boy / Hollow Knight 的参数都有公开 / datamine 数字。从已知好用的 baseline 抄来再微调，比摸索快几个数量级。
+
+### 循环 B：先 baseline，后加档
 
 不要一上来就堆机制——否则把问题调没了看不见。分两步：
 
 - **Step A — baseline**：单档软弹簧（保留明显果冻），control point = gameplay 真相，**先诚实量未经修饰的 apex 分叉有多糟**。
 - **Step B — 按需加档**：仅当 baseline 的 apex 分叉超过"开始觉得被骗"的临界值时，才上机制 1（状态相关 stiffness 在顶点那一档收紧），必要时叠机制 2 / 3。
+
+### 把判据画在屏幕上（让手感变可证伪）
+
+debug overlay 把下方 4 条判据变肉眼可读：
+- 输入瞬间标记 + control point 速度曲线（测延迟，判据 #1）
+- 同时画 control point 和 blob 质心 + 连线显示距离（测 apex 分叉，判据 #2）
+- 10 次起跳落点 x 打点（测落点散布，判据 #2）
+
+### Stop 条件 + solo 盲区
+
+- **Stop**：下方 4 条判据 **就是** stop 条件，#1/#2/#3 一过**立刻停、写结论**，不往下打磨。专属陷阱重申：blob 只有 debug 线框 + 纯色，metaball / 折射一律不碰，直到判据过。
+- **谁判手感**：自己反复玩会**适应自己的 jank**（不自觉补偿延迟、觉得"还行"）。便宜解法：录 gif **第二天冷眼回看**，或抓 1-2 人玩两分钟——外部眼睛逮得到你已看瞎的"发飘"。
 
 ---
 
