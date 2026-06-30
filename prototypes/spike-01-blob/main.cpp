@@ -309,8 +309,13 @@ public:
 
     void OnImGui() override
     {
+        // 面板右置（首次），把左侧 / 中央 viewport 让给 control point + blob
+        // （出生点在左侧，避免被面板遮挡）；ImGuiCond_FirstUseEver 保留用户拖动。
+        ImGui::SetNextWindowPos(ImVec2(944.0f, 8.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(328.0f, 360.0f), ImGuiCond_FirstUseEver);
         ImGui::Begin("Loop A — control point 手感调参 (live, no recompile)");
 
+        ImGui::TextUnformatted("操作: A/D 移动 | Space/W 跳跃 | 面板可拖动");
         ImGui::TextUnformatted("一次只动一个旋钮，改完跑同一套测试路线对比。");
         ImGui::Separator();
 
@@ -390,6 +395,8 @@ public:
         // baseline = 单档软弹簧（spec：先 baseline 后加档；状态相关 stiffness
         // = 机制 1 是 Step B，本次只暴露单档 slider，不预先写状态机）。
         // ===================================================================
+        ImGui::SetNextWindowPos(ImVec2(944.0f, 376.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(328.0f, 336.0f), ImGuiCond_FirstUseEver);
         ImGui::Begin("Loop B — 软体 blob 视觉耦合 (live, no recompile)");
 
         ImGui::TextUnformatted("blob 用弹簧软软追 control point；纯位移分叉 = juice，");
