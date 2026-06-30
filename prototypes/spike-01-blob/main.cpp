@@ -2,10 +2,14 @@
 //
 // 设计规格：../spike-01-blob-feel.md（执行规格）+ ../phase0-pillars.md（宪法）。
 //
-// 本文件实现 spike 的 **Loop A —— gameplay 真相层**：一个隐藏的 control point
-// （Box2D dynamic 刚体，用 debug draw 画成小框）承载落点 / 碰撞 / 输入响应，
-// 调成标准平台跳跃手感。**本里程碑不做软体 blob**（Loop B 的事）；control point
-// 只用 debug draw 标记，不碰 metaball / 折射 / 任何好看渲染（spec 硬纪律：feel 在前）。
+// 本文件实现 spike 的 **Loop A + Loop B**：
+//   * Loop A —— gameplay 真相层：隐藏 control point（Box2D dynamic 刚体）承载
+//     落点 / 碰撞 / 输入响应，调成标准平台跳跃手感（已落地，本次不动其手感逻辑）。
+//   * Loop B —— 视觉表现层：可见软体 blob（自写 Verlet/PBD，见 Blob.h）用弹簧
+//     软软追 control point，是主可见物。仍只用 debug 线框 + 纯色，不碰 metaball /
+//     折射 / 任何好看渲染（spec 硬纪律：feel 在前视觉在后）。
+//   * blob 接在 FixedStep 同一固定子步内推进；apex 分叉（视觉质心 ↔ control point
+//     距离）实时画在屏幕 + ImGui 读数，是本 spike 的核心待测产出（"果冻预算"）。
 //
 // 核心架构（spec "果冻感和精确落点不在同一层"）：
 //   * gameplay 真相 = control point（这里实现）：天生精确、可预测；
@@ -55,6 +59,9 @@
 // 公共头本身零 imgui 类型；GAP-2026-05-27-consumer-imgui-tuning-hook 已补完）。
 #include <imgui.h>
 
+// Loop B —— 软体 blob 仿真（自写 Verlet/PBD，纯游戏代码；见 Blob.h 头注释）。
+#include "Blob.h"
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -90,6 +97,11 @@ constexpr std::uint32_t kYellow  = 0xFF00FFFFu;  // control point 标记
 constexpr std::uint32_t kMagenta = 0xFFFF00FFu;  // 速度向量
 constexpr std::uint32_t kWhite   = 0xFFFFFFFFu;  // 输入瞬间标记
 constexpr std::uint32_t kGrey    = 0xFF808080u;  // 接地指示
+// Loop B 配色（ABGR：低 8 位 R）。
+constexpr std::uint32_t kBlob     = 0xFF66FF66u;  // 软体 blob perimeter loop（主可见物）
+constexpr std::uint32_t kSpoke    = 0xFF338833u;  // blob center 辐条（暗绿）
+constexpr std::uint32_t kDiverge  = 0xFF00A5FFu;  // apex 分叉连线（橙：cp ↔ 视觉质心）
+constexpr std::uint32_t kCentroid = 0xFF00D7FFu;  // blob 视觉质心十字标记（金）
 
 // 固定物理步长：60Hz（spec 地基 #2，与渲染帧率解耦）。
 constexpr float kFixedDt = 1.0f / 60.0f;
@@ -200,6 +212,14 @@ public:
     {
         BuildActionMap();
         mVxHistory.fill(0.0f);
+
+        // Loop B：把关卡 AABB 转成 Blob 的最小碰撞视图（同一份几何真相，
+        // 引擎 PhysicsWorld 无 raycast/overlap 故 blob 点照样 analytic 投影）。
+        mBlobLevel.reserve(mLevel.size());
+        for (const auto& b : mLevel)
+        {
+            mBlobLevel.push_back({b.min, b.max});
+        }
     }
 
     // 留给 Loop B：软体 blob 每帧读这个快照，用弹簧吸附 control point。
@@ -256,6 +276,24 @@ public:
         // 速度历史（判据 #1 延迟曲线）。
         mVxHistory[mVxHead] = bvel.x;
         mVxHead = (mVxHead + 1) % static_cast<int>(mVxHistory.size());
+
+        // —— Loop B：apex 分叉测量（spec 核心产出 = "果冻预算"）——
+        // 分叉 = blob 视觉质心与 control point 的距离。读三个数：
+        //   * 当前分叉 mDivergence；
+        //   * 跳跃顶点那一刻的分叉 mApexDivergence（vy 由 + 翻 - 的瞬间采）；
+        //   * 运行期峰值 mPeakDivergence（可重置）。
+        if (mBlob.Initialized())
+        {
+            mBlobCentroid = mBlob.Centroid();
+            mDivergence   = glm::length(mBlobCentroid - mCpState.position);
+            mPeakDivergence = std::max(mPeakDivergence, mDivergence);
+            const float vy = mCpState.velocity.y;
+            if (!mGrounded && mPrevVy > 0.0f && vy <= 0.0f)
+            {
+                mApexDivergence = mDivergence;  // 跳跃顶点 = 玩家读图决定落点的瞬间
+            }
+            mPrevVy = vy;
+        }
 
         if (mInputFlashTimer > 0.0f)
         {
@@ -343,6 +381,61 @@ public:
         if (ImGui::Button("重置 control point"))
         {
             ResetControlPoint();
+        }
+
+        ImGui::End();
+
+        // ===================================================================
+        // Loop B —— 软体 blob 视觉耦合调参（不碰 gameplay 数值，只管果冻跟得对不对）。
+        // baseline = 单档软弹簧（spec：先 baseline 后加档；状态相关 stiffness
+        // = 机制 1 是 Step B，本次只暴露单档 slider，不预先写状态机）。
+        // ===================================================================
+        ImGui::Begin("Loop B — 软体 blob 视觉耦合 (live, no recompile)");
+
+        ImGui::TextUnformatted("blob 用弹簧软软追 control point；纯位移分叉 = juice，");
+        ImGui::TextUnformatted("只在读图决策瞬间（顶点/待机/对缝）才需要收敛回真相。");
+        ImGui::Separator();
+
+        if (ImGui::CollapsingHeader("弹簧吸附 (核心)", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::SliderFloat("stiffness (吸附硬度)", &mBlobParams.stiffness, 20.0f, 1500.0f);
+            ImGui::SliderFloat("damping (弹簧阻尼)", &mBlobParams.damping, 0.0f, 50.0f);
+            ImGui::TextDisabled("提示: 临界阻尼 c=2*sqrt(k); 现 c<临界 = 欠阻尼(弹/晃)");
+        }
+        if (ImGui::CollapsingHeader("PBD 约束 (sim 先稳)", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::SliderInt("约束迭代次数", &mBlobParams.constraintIters, 1, 20);
+            ImGui::SliderFloat("edge stiffness (距离约束)", &mBlobParams.edgeStiffness, 0.0f, 1.0f);
+            ImGui::SliderFloat("area stiffness (面积/保体积)", &mBlobParams.areaStiffness, 0.0f, 1.0f);
+        }
+        if (ImGui::CollapsingHeader("形状 / 渲染", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::SliderFloat("blob radius (u)", &mBlobParams.blobRadius, 0.2f, 1.0f);
+            ImGui::SliderFloat("collision skin (u)", &mBlobParams.skin, 0.0f, 0.1f);
+            ImGui::Checkbox("画辐条", &mBlobParams.drawSpokes);
+            ImGui::SameLine();
+            ImGui::Checkbox("画 control point 标记", &mBlobParams.drawCpMarker);
+            ImGui::Text("质点数: %d perimeter + 1 center (固定, 改在 Blob 构造)",
+                        mBlob.PerimeterCount());
+        }
+
+        // —— apex 分叉读数（spec 核心产出 = "果冻预算"）——
+        ImGui::Separator();
+        ImGui::TextUnformatted("apex 分叉 = blob 视觉质心与 control point 的距离:");
+        ImGui::Text("  当前分叉      : %.3f u", static_cast<double>(mDivergence));
+        ImGui::Text("  最近顶点分叉  : %.3f u", static_cast<double>(mApexDivergence));
+        ImGui::Text("  运行期峰值    : %.3f u", static_cast<double>(mPeakDivergence));
+        ImGui::TextDisabled("用法: 跳到顶点冷眼看连线长短 + 读「最近顶点分叉」;");
+        ImGui::TextDisabled("超过「开始觉得瞄不准」的值 = 果冻预算临界, 那时才上机制1。");
+        if (ImGui::Button("重置峰值"))
+        {
+            mPeakDivergence = 0.0f;
+            mApexDivergence = 0.0f;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("重置 blob"))
+        {
+            mBlob.Reset(mCpState.position, mBlobParams.blobRadius);
         }
 
         ImGui::End();
@@ -501,6 +594,11 @@ private:
         }
 
         mVel = postVel;
+
+        // —— Loop B：在同一固定子步内推进软体 blob（spec 地基 #2：与 control point
+        //    同步、固定步长；变步长会让 blob 易炸）。用本子步已解算的 control point
+        //    位置当弹簧 target。**只读 postPos，不改 control point 手感逻辑。** ——
+        mBlob.Step(dt, postPos, mBlobLevel, mBlobParams);
     }
 
     // 接地：脚底是否落在某 LevelBox 顶面附近（且未在上升）。
@@ -607,6 +705,12 @@ private:
         mVel = {0.0f, 0.0f};
         mCoyoteTimer = 0.0f;
         mJumpBufferTimer = 0.0f;
+
+        // Loop B：blob 跟着回到出生点静止起步（避免重置后弹簧从远处猛甩）。
+        mBlob.Reset(kSpawn, mBlobParams.blobRadius);
+        mApexDivergence = 0.0f;
+        mPeakDivergence = 0.0f;
+        mPrevVy = 0.0f;
     }
 
     // —— overlay：场景碰撞盒 + control point 标记 + 速度向量 + 输入标记 + 落点 ——
@@ -627,9 +731,13 @@ private:
         const glm::vec2 p = mCpState.position;
         const glm::vec3 c3{p, 0.0f};
 
-        // control point 小框（gameplay 真相层 —— 将来被 Loop B 软体 blob 取代）。
-        const glm::vec3 half{mParams.cpHalfWidth, mParams.cpHalfHeight, 0.0f};
-        dbg->AddAabb(c3 - half, c3 + half, kYellow);
+        // control point 小框（gameplay 真相层）。Loop B 起 blob 是主可见物，
+        // 这里只作叠加小标记对比"软体 vs 隐藏真相"，可经 slider 关。
+        if (mBlobParams.drawCpMarker)
+        {
+            const glm::vec3 half{mParams.cpHalfWidth, mParams.cpHalfHeight, 0.0f};
+            dbg->AddAabb(c3 - half, c3 + half, kYellow);
+        }
 
         // 接地指示：脚底一条短横线（grey=空中, yellow=接地）。
         const float feetY = p.y - mParams.cpHalfHeight;
@@ -656,6 +764,40 @@ private:
         {
             dbg->AddLine(glm::vec3(lp.x, lp.y, 0.0f),
                          glm::vec3(lp.x, lp.y + 0.35f, 0.0f), kAmber);
+        }
+
+        // —— Loop B：软体 blob（主可见物，纯 debug 线框 + 纯色，spec 硬纪律 feel 在前）——
+        if (mBlob.Initialized())
+        {
+            const auto& bp = mBlob.Positions();
+            const int   n  = mBlob.PerimeterCount();
+
+            // perimeter 闭合 loop 线。
+            for (int i = 0; i < n; ++i)
+            {
+                const int j = (i + 1) % n;
+                dbg->AddLine(glm::vec3(bp[i], 0.0f), glm::vec3(bp[j], 0.0f), kBlob);
+            }
+            // center 辐条（可选；展示内部约束结构）。
+            if (mBlobParams.drawSpokes)
+            {
+                const glm::vec3 ctr(bp[mBlob.CenterIndex()], 0.0f);
+                for (int i = 0; i < n; ++i)
+                {
+                    dbg->AddLine(ctr, glm::vec3(bp[i], 0.0f), kSpoke);
+                }
+            }
+
+            // apex 分叉 overlay（spec 核心产出）：control point ↔ blob 视觉质心
+            // 连线 + 质心十字标记。连线越长 = 果冻越"骗人"，这就是要量的预算。
+            const glm::vec3 cpw(mCpState.position, 0.0f);
+            const glm::vec3 ctw(mBlobCentroid, 0.0f);
+            dbg->AddLine(cpw, ctw, kDiverge);
+            constexpr float km = 0.08f;
+            dbg->AddLine(ctw - glm::vec3(km, 0.0f, 0.0f), ctw + glm::vec3(km, 0.0f, 0.0f),
+                         kCentroid);
+            dbg->AddLine(ctw - glm::vec3(0.0f, km, 0.0f), ctw + glm::vec3(0.0f, km, 0.0f),
+                         kCentroid);
         }
     }
 
@@ -688,6 +830,16 @@ private:
     // 对外快照（Loop B）
     ControlPointState mCpState;
 
+    // —— Loop B：软体 blob 视觉表现层 ——
+    spike01::Blob                      mBlob{14};   // 14 perimeter + 1 center 质点
+    spike01::BlobParams                mBlobParams;
+    std::vector<spike01::BlobLevelBox> mBlobLevel;  // 关卡 AABB 碰撞视图（构造时从 mLevel 建）
+    glm::vec2                          mBlobCentroid{0.0f, 0.0f};
+    float                              mDivergence     = 0.0f;  // 当前 |质心 - cp|
+    float                              mApexDivergence = 0.0f;  // 最近跳跃顶点的分叉
+    float                              mPeakDivergence = 0.0f;  // 运行期峰值（可重置）
+    float                              mPrevVy         = 0.0f;  // 上帧 cp 垂直速度（apex 检测）
+
     // overlay / 判据
     float                  mInputFlashTimer = 0.0f;
     std::array<float, 180> mVxHistory{};
@@ -700,7 +852,7 @@ private:
 int main()
 {
     AppConfig cfg{};
-    cfg.window.title  = "OrangeGames - spike-01-blob (Loop A: control point feel)";
+    cfg.window.title  = "OrangeGames - spike-01-blob (Loop A control point + Loop B soft blob)";
     cfg.window.width  = 1280;
     cfg.window.height = 720;
 

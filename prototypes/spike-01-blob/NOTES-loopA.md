@@ -52,6 +52,14 @@ ceiling-bonk 用"上升中 Box2D 把 vy 打没了"间接探测。
 Box2D 3.x 的 `b2World_CastRayClosest` / `b2World_OverlapAABB` 直接对应，封装代价低；
 公共面继续只暴露中性 `BodyHandle` + glm 类型，不破 header isolation 不变量。
 
+**Loop B 复核确认（2026-07-01，无新缺口）**：Loop B 软体 blob 的每质点 vs 环境
+碰撞如本条"局限"第 3 点所预测，**确实再次撞到同一缺口**——blob 没有走 Box2D
+（blob 是纯游戏侧 Verlet/PBD 质点，不是刚体），其碰撞用与 control point 同一份
+`mLevel` AABB 做 analytic 投影（`Blob::SatisfyCollision`，把钻进盒内的点推到最浅
+穿透面）。**未新增引擎缺口**：blob 碰撞需求被现有 workaround 完全覆盖。同样的
+"游戏侧自持 AABB 几何才成立 / 来了 tilemap / polygon collider 就失效"局限照旧适用，
+故本条 GAP 维持登记。
+
 ---
 
 ## 设计记录（非缺口，仅备忘 control point 的 body 选型）
