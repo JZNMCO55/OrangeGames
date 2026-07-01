@@ -586,11 +586,18 @@ private:
         mGrounded = grounded;
 
         // —— 爬墙：侧向探墙 + coyote + 锁定计时 + 抓墙判定（在水平/跳跃/重力之前定状态）——
+        // 窄缝里两壁都在探测范围内：**优先取玩家正按向的那面墙**（按意图选），否则任一侧有墙
+        // 就取。这样在窄缝双壁间才能按方向交替墙跳往上爬（挤缝是 spike 核心卖点）——否则恒选
+        // 固定一侧会导致墙跳方向永远朝同一边、爬不上去。
         int wallDir = 0;
         if (mParams.wallEnabled && !grounded)
         {
-            if (ProbeWall(pos, +1))      wallDir = +1;
-            else if (ProbeWall(pos, -1)) wallDir = -1;
+            const bool wallR = ProbeWall(pos, +1);
+            const bool wallL = ProbeWall(pos, -1);
+            if (mMoveAxis > 0.0f && wallR)      wallDir = +1;  // 按右 + 右有墙
+            else if (mMoveAxis < 0.0f && wallL) wallDir = -1;  // 按左 + 左有墙
+            else if (wallR)                     wallDir = +1;  // 无方向意图：任一侧
+            else if (wallL)                     wallDir = -1;
         }
         mWallDir = wallDir;
         if (wallDir != 0)
