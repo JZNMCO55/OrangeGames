@@ -1,0 +1,16 @@
+# ---------------------------------------------------------------------------
+# OrangeGames .gitignore
+# ---------------------------------------------------------------------------
+
+# 构建产物（CMake / VS 生成目录，含 bin / CMakeFiles / x64 / *.sln / *.vcxproj 等）
+/build/
+build-*/
+
+# Blender 自动备份文件
+*.blend1
+
+# 生成 / 可重生的美术产物 —— source 在 art/scripts（脚本）+ art/blend（.blend 源）。
+# renders 是渲染输出、cooked 是烘焙产物，都可由 source 重生，不入仓避免仓库膨胀。
+# 若确需归档某张参考图，可对具体文件 `git add -f`。
+/art/renders/
+/art/cooked/
