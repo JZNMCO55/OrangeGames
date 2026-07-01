@@ -17,8 +17,10 @@
 //   * PBD 约束（迭代次数走 slider，spec 地基 #3 sim 先稳）：
 //       - distance 约束：相邻 perimeter 边 + center→perimeter 辐条；
 //       - area 约束：保 perimeter 多边形面积不塌（被挤压后能弹回 = 钻缝）。
-//   * 碰撞：每质点 vs LevelBox AABB analytic 投影（引擎 PhysicsWorld 无 raycast/
-//     overlap 查询，见 NOTES-loopA.md，照样用游戏侧自持几何投影）。
+//   * 碰撞：每质点 vs 关卡盒 AABB analytic 投影。引擎已提供 raycast/overlap 查询，
+//     但软体每质点连续投影用 analytic 更省更稳（且外观由此调好），故 Loop A 的接地/
+//     角落探针迁到引擎查询后，blob 仍保留 analytic；几何直接读单一 mLevel（不再另存
+//     一份副本），Step 以模板收任意暴露 .min/.max 的盒类型，与 main.cpp 的 LevelBox 解耦。
 //
 // 本 Blob 不带独立重力——control point 已承载重力，blob 只负责"软软跟随"，
 // 跟随途中的 overshoot / 拖尾 / 分叉就是 juice（spec：纯位移途中随便分叉）。
@@ -62,12 +64,9 @@ struct BlobParams
     bool drawCpMarker = true;  // 叠画 control point 小标记（对比 gameplay 真相）
 };
 
-// LevelBox 的最小视图（让 Blob 不依赖 main.cpp 的完整 LevelBox 类型）。
-struct BlobLevelBox
-{
-    glm::vec2 min;
-    glm::vec2 max;
-};
+// 碰撞几何以模板参数收：任何暴露 `glm::vec2 min` / `glm::vec2 max` 成员的盒类型都行
+// （main.cpp 的 LevelBox 即是）。如此 Blob 既不依赖 main.cpp 的完整 LevelBox 定义，
+// 又能直接复用单一 mLevel 数据源、免维护第二份 AABB 副本。
 
 // ===========================================================================
 // Blob —— 自写 Verlet + PBD 软体。所有方法 inline（header-only，仅 main.cpp 包含）。
@@ -108,8 +107,9 @@ public:
     //   1. Verlet 半隐式积分（弹簧吸附 target + 阻尼）；
     //   2. PBD 约束迭代（distance + area + 碰撞）；
     //   3. 末尾再投影一次碰撞确保不嵌入。
+    template <class LevelBoxT>
     void Step(float dt, glm::vec2 cpPos,
-              const std::vector<BlobLevelBox>& level, const BlobParams& p)
+              const std::vector<LevelBoxT>& level, const BlobParams& p)
     {
         if (!mInit)
         {
@@ -262,9 +262,10 @@ private:
         }
     }
 
-    // 碰撞：每质点 vs 每 LevelBox AABB（按 skin 膨胀），点钻进盒内则投影到最近面。
-    // analytic 投影 = 引擎 PhysicsWorld 无 raycast/overlap 的 workaround（见 NOTES）。
-    void SatisfyCollision(const std::vector<BlobLevelBox>& level, float skin)
+    // 碰撞：每质点 vs 每关卡盒 AABB（按 skin 膨胀），点钻进盒内则投影到最近面。
+    // analytic 每质点投影：软体连续碰撞用它更省更稳，几何取自单一 mLevel（模板收）。
+    template <class LevelBoxT>
+    void SatisfyCollision(const std::vector<LevelBoxT>& level, float skin)
     {
         for (auto& pos : mPos)
         {

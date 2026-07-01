@@ -112,6 +112,24 @@ constexpr float kMaxFrameDt = 0.10f;
 constexpr glm::vec2 kSpawn{-5.0f, -2.5f};
 
 // ---------------------------------------------------------------------------
+// 碰撞过滤位（category/mask）——引擎新落地的 QueryFilter 用它做“只命中关卡几何、
+// 自动排除 control point 自身”的干净分类（见 ProbeGrounded / HeadClearAt）。
+//   * kCatPlayer = control point（动态刚体）；
+//   * kCatGround = isGround 的平地；
+//   * kCatWall   = 其余静态盒（左右平台 + 窄缝两壁）。
+// 所有 body 的 maskBits 仍保持 0xFFFFFFFF（与一切碰撞）→ 真实 Box2D 碰撞行为
+// 与迁移前逐字不变；category 位仅供空间查询按类过滤。
+// 查询命中规则（对齐 Box2D）：
+//   (filter.maskBits & collider.categoryBits) && (collider.maskBits & filter.categoryBits)
+// 故查询用 QueryFilter{categoryBits=all, maskBits=kCatGround|kCatWall} 即可只打
+// 关卡几何、天然排除 kCatPlayer（player 不在 mask 里）——无需手动剔除 self。
+constexpr std::uint32_t kCatPlayer = 0x1u;  // = ColliderComponent 默认 categoryBits
+constexpr std::uint32_t kCatGround = 0x2u;
+constexpr std::uint32_t kCatWall   = 0x4u;
+// 关卡实心几何的查询 mask（平地 + 平台 + 墙，即原 analytic 探针遍历的全部盒）。
+constexpr std::uint32_t kSolidMask = kCatGround | kCatWall;
+
+// ---------------------------------------------------------------------------
 // 手感旋钮（全部走 ImGui slider，不 hardcode 数值）。
 // baseline 抄 Celeste 经典起点（coyote ~5 帧 / buffer ~6 帧 / 跑速 ~9 u/s），
 // 供用户第二天真机微调；详见 spec "循环 A 调参顺序" + "别从零发明手感"。
@@ -146,17 +164,20 @@ struct FeelParams
     float cpHalfHeight = 0.28f;  // 半高
 };
 
-// 一块静态碰撞盒（既喂 Box2D 静态 body，又作 analytic 探针的几何真相）。
+// 一块静态碰撞盒。单一几何真相：既喂 Box2D 静态 body（碰撞解算），又供 debug
+// 线框可视，还作为 Blob 软体碰撞的 AABB 源（见 Blob::Step）。接地 / 角落 / 天花板
+// 探针已迁移到引擎空间查询（不再读本结构），但 isGround 仍用于 body 建 collider 时
+// 分类 kCatGround / kCatWall（供查询按类过滤），color 供 debug 上色。
 struct LevelBox
 {
     glm::vec2     min;
     glm::vec2     max;
     std::uint32_t color;
-    bool          isGround;  // 平地不参与天花板角落修正探测
+    bool          isGround;  // true=平地(kCatGround)；false=平台/墙(kCatWall)
 };
 
 // Spike 1 规格那一屏：平地 + 左/右平台 + 右边沿 ledge + 中间窄缝两壁。
-// 单一数据源：同一份 box 列表既建 Box2D 静态体，又供接地 / 角落 analytic 探针。
+// 单一数据源：同一份 box 列表既建 Box2D 静态体，又喂 debug 线框，又作 Blob 碰撞 AABB。
 std::vector<LevelBox> MakeLevel()
 {
     return {
@@ -213,13 +234,8 @@ public:
         BuildActionMap();
         mVxHistory.fill(0.0f);
 
-        // Loop B：把关卡 AABB 转成 Blob 的最小碰撞视图（同一份几何真相，
-        // 引擎 PhysicsWorld 无 raycast/overlap 故 blob 点照样 analytic 投影）。
-        mBlobLevel.reserve(mLevel.size());
-        for (const auto& b : mLevel)
-        {
-            mBlobLevel.push_back({b.min, b.max});
-        }
+        // Loop B：blob 软体碰撞直接复用单一 mLevel（不再维护第二份几何副本，
+        // 消除“两份 AABB 可能漂移”风险）；Blob::Step 只读 LevelBox 的 min/max。
     }
 
     // 留给 Loop B：软体 blob 每帧读这个快照，用弹簧吸附 control point。
@@ -505,8 +521,8 @@ private:
 
         glm::vec2 pos = mPhys.GetBodyTransform(mCp).position;
 
-        // 接地探测（analytic，针对 game 自持的 LevelBox —— 引擎 PhysicsWorld
-        // 公共面无 contact / raycast 查询，见 NOTES-loopA.md）。
+        // 接地探测（引擎 RaycastClosest 向下投射，按 category/mask 只打关卡实心几何、
+        // 自动排除 control point 自身；窗口/容差与原 analytic 逐字等价，见 ProbeGrounded）。
         const bool grounded = ProbeGrounded(pos);
 
         // coyote：在地面时刷满，离地后随时间衰减。
@@ -605,10 +621,19 @@ private:
         // —— Loop B：在同一固定子步内推进软体 blob（spec 地基 #2：与 control point
         //    同步、固定步长；变步长会让 blob 易炸）。用本子步已解算的 control point
         //    位置当弹簧 target。**只读 postPos，不改 control point 手感逻辑。** ——
-        mBlob.Step(dt, postPos, mBlobLevel, mBlobParams);
+        //    碰撞几何直接用单一 mLevel（Blob::Step 只读其 min/max）。
+        mBlob.Step(dt, postPos, mLevel, mBlobParams);
     }
 
-    // 接地：脚底是否落在某 LevelBox 顶面附近（且未在上升）。
+    // 接地：脚底是否落在某关卡盒顶面附近（且未在上升）。
+    // 迁移：原 analytic「脚底 y 落进某盒顶面窗口 [top-0.06, top+0.10] 且水平交叠」
+    // 换成引擎 RaycastClosest 向下投射。为逐字保住原窗口：从脚底上方 kLandEps 处起
+    // 射，maxDist = kLandEps + kProbeDist，则命中距离 d = (feetY+kLandEps) - top，
+    // d ∈ [0, kLandEps+kProbeDist] ⇔ feetY - top ∈ [-kLandEps, +kProbeDist]，与原一致。
+    // 起点抬高 kLandEps 也保证脚底略嵌入（≤kLandEps）时 origin 仍在顶面之上、射线
+    // 从盒外向下干净命中顶面（raycast 不报 origin 处的 initial-overlap）。
+    // 宽度：原 xOverlap 是整宽区间交叠；这里用左沿/中心/右沿三点采样近似——本关卡
+    // 平台都远宽于 control point，边沿站立（中心悬出）能被对应边沿射线接住。
     bool ProbeGrounded(glm::vec2 pos) const
     {
         if (mVel.y > 0.05f)
@@ -618,13 +643,16 @@ private:
         const float feetY = pos.y - mParams.cpHalfHeight;
         constexpr float kLandEps = 0.06f;    // 容许略微嵌入 / 浮空
         constexpr float kProbeDist = 0.10f;  // 脚下探测距离
-        for (const auto& b : mLevel)
+        const float originY = feetY + kLandEps;
+        const float maxDist = kLandEps + kProbeDist;
+        // categoryBits=all（本查询代表“任何类”），maskBits=kSolidMask（只命中关卡实心
+        // 几何；player 不在 mask 里 → 自动排除自身）。
+        const Phys::QueryFilter filter{0xFFFFFFFFu, kSolidMask};
+        for (const float sx : {pos.x - mParams.cpHalfWidth, pos.x, pos.x + mParams.cpHalfWidth})
         {
-            const float top = b.max.y;
-            const bool xOverlap = (pos.x + mParams.cpHalfWidth > b.min.x) &&
-                                  (pos.x - mParams.cpHalfWidth < b.max.x);
-            const bool yNear = (feetY <= top + kProbeDist) && (feetY >= top - kLandEps);
-            if (xOverlap && yNear)
+            const Phys::RaycastHit hit =
+                mPhys.RaycastClosest({sx, originY}, {0.0f, -1.0f}, maxDist, filter);
+            if (hit.hit)
             {
                 return true;
             }
@@ -633,25 +661,21 @@ private:
     }
 
     // 头部在给定 x 是否与任一 solid box 的顶角交叠（corner correction 探测）。
+    // 迁移：原 analytic「头顶带盒 vs 每个非平地盒 AABB 交叠（isGround 跳过）」换成引擎
+    // OverlapAABB（同一头顶带盒坐标）。filter = kCatWall（只墙 / 平台类）——直接对应原
+    // HeadClearAt 跳过 ground 的语义（平地是脚下的，不参与顶角修正），不依赖"头顶盒几何上
+    // 够不到平地"的关卡假设；且 kCatPlayer 天然不在 mask 里 → 排除自身无需手动剔除。
+    // 返回列表非空 = 头没让开。
+    // 注意：OverlapAABB 是 broad-phase（fat-AABB），可能过报（盒真实形状略在查询框外
+    // 也报命中）→ corner correction 触发可能比原 analytic 略更积极；见交付报告 dogfood 项。
     bool HeadClearAt(float x, float y) const
     {
         const float headLo = y + mParams.cpHalfHeight - 0.05f;
         const float headHi = y + mParams.cpHalfHeight + 0.05f;
-        for (const auto& b : mLevel)
-        {
-            if (b.isGround)
-            {
-                continue;
-            }
-            const bool xOverlap = (x + mParams.cpHalfWidth > b.min.x) &&
-                                  (x - mParams.cpHalfWidth < b.max.x);
-            const bool yOverlap = (headHi > b.min.y) && (headLo < b.max.y);
-            if (xOverlap && yOverlap)
-            {
-                return false;
-            }
-        }
-        return true;
+        const Phys::QueryFilter filter{0xFFFFFFFFu, kCatWall};
+        const std::vector<Phys::BodyHandle> hits = mPhys.OverlapAABB(
+            {x - mParams.cpHalfWidth, headLo}, {x + mParams.cpHalfWidth, headHi}, filter);
+        return hits.empty();  // 无实心几何交叠 = 头部让开
     }
 
     // 顶到角落时从最小推移开始两侧扫，找到第一处头部让开的 x 就吸附过去。
@@ -688,6 +712,8 @@ private:
         col.density     = 1.0f;
         col.friction    = 0.0f;  // 水平由手感逻辑全权控制，不让地面摩擦掺和
         col.restitution = 0.0f;
+        col.categoryBits = kCatPlayer;   // ReplaceFixture 会重置过滤位，须显式重设
+        col.maskBits     = 0xFFFFFFFFu;  // 仍与一切碰撞（行为不变）
         mPhys.ReplaceFixture(mCp, col);
         mLastHalfW = mParams.cpHalfWidth;
         mLastHalfH = mParams.cpHalfHeight;
@@ -840,7 +866,6 @@ private:
     // —— Loop B：软体 blob 视觉表现层 ——
     spike01::Blob                      mBlob{14};   // 14 perimeter + 1 center 质点
     spike01::BlobParams                mBlobParams;
-    std::vector<spike01::BlobLevelBox> mBlobLevel;  // 关卡 AABB 碰撞视图（构造时从 mLevel 建）
     glm::vec2                          mBlobCentroid{0.0f, 0.0f};
     float                              mDivergence     = 0.0f;  // 当前 |质心 - cp|
     float                              mApexDivergence = 0.0f;  // 最近跳跃顶点的分叉
@@ -922,6 +947,10 @@ int main()
         Phys::ColliderComponent col;
         col.shape    = Phys::BoxDesc{half, {0.0f, 0.0f}};
         col.friction = 0.0f;
+        // 分类：平地 kCatGround，平台 / 墙 kCatWall；mask 全通 → 碰撞行为不变，
+        // 仅供空间查询按类过滤（接地 / 头顶探针只打 kSolidMask，排除 control point）。
+        col.categoryBits = b.isGround ? kCatGround : kCatWall;
+        col.maskBits     = 0xFFFFFFFFu;
         if (!physWorld.AddBody(rb, col).IsValid())
         {
             std::fprintf(stderr, "AddBody(static level box) failed\n");
@@ -945,6 +974,8 @@ int main()
         col.density     = 1.0f;
         col.friction    = 0.0f;
         col.restitution = 0.0f;
+        col.categoryBits = kCatPlayer;   // control point 类；查询用 mask 排除自身
+        col.maskBits     = 0xFFFFFFFFu;  // 仍与一切碰撞（撞墙 / 踩平台，行为不变）
         cpBody = physWorld.AddBody(rb, col);
         if (!cpBody.IsValid())
         {
