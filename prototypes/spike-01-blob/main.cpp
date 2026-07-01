@@ -159,6 +159,18 @@ struct FeelParams
     float jumpBufferTime      = 0.10f; // 落地前预输入跳跃的缓冲 s（~6 帧）
     float cornerCorrectionDist = 0.25f; // 顶到角落时的最大水平推移 u（0 = 关）
 
+    // —— 爬墙 wall-climb（本轮新增；dogfood-pending：手感未真机验证，靠 slider 现场调）——
+    // 分层同 Loop A：爬墙只作用在 control point（gameplay 真相），blob 照旧软软追随。
+    bool  wallEnabled      = true;   // 总开关（关掉退回纯 Loop A 手感）
+    float wallSlideSpeed   = 3.5f;   // 按住朝墙 + 空中下落时的下滑限速 u/s（须 < maxFallSpeed 才有"抓住"感）
+    float wallJumpSpeedX   = 11.0f;  // 墙跳离墙水平初速 u/s
+    float wallJumpSpeedY   = 15.0f;  // 墙跳竖直初速 u/s
+    float wallJumpLockTime = 0.12f;  // 墙跳后抑制"回墙"输入的时长 s（防立刻粘回刚跳离的墙）
+    float wallCoyoteTime   = 0.08f;  // 离墙后仍可墙跳的宽限 s
+    float wallClimbSpeed   = 4.0f;   // 抓墙（LeftShift）时 ↑/↓ 攀爬速度 u/s
+    float wallStamina      = 0.0f;   // 抓墙耐力上限 s（0 = 无限，先不加压力，dogfood 再定）
+    float wallDetectDist   = 0.06f;  // 侧向探墙距离 u（cpHalfWidth 之外多远算贴墙）
+
     // —— control point 尺寸（小框 / 小胶囊代理）——
     float cpHalfWidth  = 0.18f;  // 半宽（须 < 窄缝半宽 0.4 才钻得过）
     float cpHalfHeight = 0.28f;  // 半高
@@ -315,6 +327,10 @@ public:
         {
             mInputFlashTimer = std::max(0.0f, mInputFlashTimer - dt);
         }
+        if (mWallJumpFlash > 0.0f)
+        {
+            mWallJumpFlash = std::max(0.0f, mWallJumpFlash - dt);
+        }
 
         DrawDebug();
         mPipeline.Render(mWorld);
@@ -331,7 +347,7 @@ public:
         ImGui::SetNextWindowSize(ImVec2(328.0f, 360.0f), ImGuiCond_FirstUseEver);
         ImGui::Begin("Loop A — control point 手感调参 (live, no recompile)");
 
-        ImGui::TextUnformatted("操作: A/D 移动 | Space/W 跳跃 | 面板可拖动");
+        ImGui::TextUnformatted("操作: A/D 移动 | Space/W 跳跃 | 贴墙:按住朝墙下滑 · 贴墙跳=墙跳 · Shift 抓墙+↑↓攀爬");
         ImGui::TextUnformatted("一次只动一个旋钮，改完跑同一套测试路线对比。");
         ImGui::Separator();
 
@@ -359,6 +375,19 @@ public:
             ImGui::SliderFloat("jump buffer (s)", &mParams.jumpBufferTime, 0.0f, 0.3f);
             ImGui::SliderFloat("corner correction (u)", &mParams.cornerCorrectionDist, 0.0f, 0.6f);
         }
+        if (ImGui::CollapsingHeader("爬墙 wall-climb (dogfood-pending)", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::TextUnformatted("按住朝墙=下滑 | Shift=抓墙+↑↓攀爬 | 贴墙 Space/W=墙跳");
+            ImGui::Checkbox("wall enabled", &mParams.wallEnabled);
+            ImGui::SliderFloat("wall slide speed (u/s)", &mParams.wallSlideSpeed, 0.5f, 15.0f);
+            ImGui::SliderFloat("wall jump speed X (u/s)", &mParams.wallJumpSpeedX, 2.0f, 25.0f);
+            ImGui::SliderFloat("wall jump speed Y (u/s)", &mParams.wallJumpSpeedY, 5.0f, 30.0f);
+            ImGui::SliderFloat("wall jump lock (s)", &mParams.wallJumpLockTime, 0.0f, 0.4f);
+            ImGui::SliderFloat("wall coyote (s)", &mParams.wallCoyoteTime, 0.0f, 0.3f);
+            ImGui::SliderFloat("wall climb speed (u/s)", &mParams.wallClimbSpeed, 1.0f, 12.0f);
+            ImGui::SliderFloat("wall stamina (s, 0=inf)", &mParams.wallStamina, 0.0f, 10.0f);
+            ImGui::SliderFloat("wall detect dist (u)", &mParams.wallDetectDist, 0.01f, 0.3f);
+        }
         if (ImGui::CollapsingHeader("control point 尺寸"))
         {
             // 改尺寸经 ReplaceFixture 即时生效（见 SyncColliderSize）。
@@ -374,6 +403,10 @@ public:
                     mCpState.velocity.x, mCpState.velocity.y);
         ImGui::Text("grounded %s | coyote %.3f | buffer %.3f",
                     mGrounded ? "YES" : "no ", mCoyoteTimer, mJumpBufferTimer);
+        ImGui::Text("wall %s | %s%s | wallCoyote %.3f | lock %.3f",
+                    mWallDir < 0 ? "LEFT " : (mWallDir > 0 ? "RIGHT" : "none "),
+                    mSliding ? "SLIDE " : "", mGrabbing ? "GRAB" : "",
+                    mWallCoyoteTimer, mWallJumpLockTimer);
 
         // 判据 #1：control point 水平速度曲线（看跟手延迟）。
         ImGui::PlotLines("vx history", mVxHistory.data(),
@@ -482,7 +515,11 @@ private:
         };
         add("move_left", {In::KeyCode::A, In::KeyCode::Left});
         add("move_right", {In::KeyCode::D, In::KeyCode::Right});
-        add("jump", {In::KeyCode::Space, In::KeyCode::W, In::KeyCode::Up});
+        add("jump", {In::KeyCode::Space, In::KeyCode::W});   // Up 让给爬墙 climb_up
+        // —— 爬墙输入 ——
+        add("grab", {In::KeyCode::LeftShift, In::KeyCode::RightShift}); // hold 抓墙
+        add("climb_up", {In::KeyCode::Up});
+        add("climb_down", {In::KeyCode::Down});
         mInput.Push(std::move(map));
     }
 
@@ -504,6 +541,11 @@ private:
         {
             mJumpBufferTimer = mParams.jumpBufferTime;  // 预输入缓冲
         }
+
+        // —— 爬墙输入：抓墙 hold + 上下攀爬 ——
+        mGrabHeld      = In::IsHeld(top->GetState("grab"));
+        mClimbUpHeld   = In::IsHeld(top->GetState("climb_up"));
+        mClimbDownHeld = In::IsHeld(top->GetState("climb_down"));
 
         // 输入瞬间标记（判据 #1）：移动 / 跳跃任一刚按下就闪一下。
         const bool moveEdge = In::IsTriggered(top->GetState("move_left")) ||
@@ -543,8 +585,43 @@ private:
         mWasGrounded = grounded;
         mGrounded = grounded;
 
-        // —— 水平：朝目标速度加/减速（空中控制单独减弱）——
-        const float target = mMoveAxis * mParams.maxRunSpeed;
+        // —— 爬墙：侧向探墙 + coyote + 锁定计时 + 抓墙判定（在水平/跳跃/重力之前定状态）——
+        int wallDir = 0;
+        if (mParams.wallEnabled && !grounded)
+        {
+            if (ProbeWall(pos, +1))      wallDir = +1;
+            else if (ProbeWall(pos, -1)) wallDir = -1;
+        }
+        mWallDir = wallDir;
+        if (wallDir != 0)
+        {
+            mLastWallDir     = wallDir;
+            mWallCoyoteTimer = mParams.wallCoyoteTime;   // 贴墙时刷满
+        }
+        else
+        {
+            mWallCoyoteTimer = std::max(0.0f, mWallCoyoteTimer - dt);
+        }
+        if (mWallJumpLockTimer > 0.0f)
+        {
+            mWallJumpLockTimer = std::max(0.0f, mWallJumpLockTimer - dt);
+        }
+        // 接地 / 离墙回满耐力；抓墙判定（hold grab + 贴墙 + 有耐力）。
+        if (grounded || wallDir == 0)
+        {
+            mStamina = mParams.wallStamina;
+        }
+        bool grabbing = mParams.wallEnabled && wallDir != 0 && !grounded && mGrabHeld &&
+                        (mParams.wallStamina <= 0.0f || mStamina > 0.0f);
+
+        // —— 水平：朝目标速度加/减速（空中控制单独减弱）。抓墙时不横向漂；墙跳锁定期禁"回墙"——
+        float moveAxis = mMoveAxis;
+        if (mWallJumpLockTimer > 0.0f && mWallJumpAwayDir != 0 && moveAxis != 0.0f &&
+            (moveAxis > 0.0f) != (mWallJumpAwayDir > 0))
+        {
+            moveAxis = 0.0f;  // 抑制朝刚跳离的墙加速
+        }
+        const float target = (grabbing ? 0.0f : moveAxis * mParams.maxRunSpeed);
         const float accel = grounded ? mParams.groundAccel : mParams.airAccel;
         const float decel = grounded ? mParams.groundDecel : mParams.airDecel;
         mVel.x = Approach(mVel.x, target, accel, decel, dt);
@@ -555,7 +632,7 @@ private:
             mVel.y = 0.0f;
         }
 
-        // —— 跳跃：buffer 与 coyote 同时有效才起跳 ——
+        // —— 跳跃：接地跳（buffer + coyote）优先；否则墙跳（buffer + 墙 coyote，非接地）——
         bool airborne = !grounded;
         if (mJumpBufferTimer > 0.0f && mCoyoteTimer > 0.0f)
         {
@@ -564,13 +641,40 @@ private:
             mCoyoteTimer = 0.0f;
             airborne = true;
         }
+        else if (mParams.wallEnabled && mJumpBufferTimer > 0.0f &&
+                 mWallCoyoteTimer > 0.0f && mCoyoteTimer <= 0.0f)
+        {
+            // 墙跳：离墙方向 = 当前墙反向（coyote 窗口内已离墙则用最近墙 mLastWallDir 反向）。
+            const int away = (wallDir != 0) ? -wallDir : -mLastWallDir;
+            mVel.y = mParams.wallJumpSpeedY;
+            mVel.x = static_cast<float>(away) * mParams.wallJumpSpeedX;
+            mWallJumpAwayDir   = away;
+            mWallJumpLockTimer = mParams.wallJumpLockTime;
+            mWallJumpFlash     = 0.15f;
+            mJumpBufferTimer   = 0.0f;
+            mWallCoyoteTimer   = 0.0f;
+            airborne = true;
+            grabbing = false;   // 墙跳抵消本步抓墙（否则下面重力段会把 vy 覆盖回攀爬速度）
+        }
         if (mJumpBufferTimer > 0.0f)
         {
             mJumpBufferTimer = std::max(0.0f, mJumpBufferTimer - dt);
         }
 
+        // —— 抓墙：重力挂起，竖直由 ↑/↓ 攀爬输入控制（分层：只动 control point）——
+        mGrabbing = grabbing;
+        mSliding  = false;
+        if (grabbing)
+        {
+            const float climb = (mClimbUpHeld ? 1.0f : 0.0f) - (mClimbDownHeld ? 1.0f : 0.0f);
+            mVel.y = climb * mParams.wallClimbSpeed;
+            if (mParams.wallStamina > 0.0f)
+            {
+                mStamina = std::max(0.0f, mStamina - dt);
+            }
+        }
         // —— 重力：上升 / 下落分档 + apex 衰减 + 松手切断上升（可变跳跃高度）——
-        if (airborne)
+        else if (airborne)
         {
             float g;
             if (mVel.y > 0.0f)
@@ -593,6 +697,15 @@ private:
             }
             mVel.y -= g * dt;
             mVel.y = std::max(mVel.y, -mParams.maxFallSpeed);
+
+            // —— 贴墙下滑：按住朝墙 + 下落 → 限速（比自由落体慢 = "抓住墙"手感）——
+            const bool pressingIntoWall = wallDir != 0 && mMoveAxis != 0.0f &&
+                                          (mMoveAxis > 0.0f) == (wallDir > 0);
+            if (mParams.wallEnabled && pressingIntoWall && mVel.y < 0.0f)
+            {
+                mVel.y   = std::max(mVel.y, -mParams.wallSlideSpeed);
+                mSliding = true;
+            }
         }
 
         // —— 提交速度 + 步进物理（Box2D 解碰撞：撞墙/天花板会修正速度）——
@@ -676,6 +789,32 @@ private:
         const std::vector<Phys::BodyHandle> hits = mPhys.OverlapAABB(
             {x - mParams.cpHalfWidth, headLo}, {x + mParams.cpHalfWidth, headHi}, filter);
         return hits.empty();  // 无实心几何交叠 = 头部让开
+    }
+
+    // 侧向探墙：从 control point 中心朝 dir(±1) 水平投三点（上/中/下）ray，命中 kCatWall =
+    // 该侧有墙。origin 取 cp 中心（Box2D 保证 cp 不嵌入墙 → origin 恒在墙外，无 initial-overlap
+    // 漏报）；maxDist = 半宽 + wallDetectDist，故贴墙 / 近墙 wallDetectDist 内都算贴。filter =
+    // kCatWall（只竖面墙 / 平台，不含脚下平地 kCatGround），与 HeadClearAt 同源过滤。
+    bool ProbeWall(glm::vec2 pos, int dir) const
+    {
+        if (dir == 0)
+        {
+            return false;
+        }
+        const float maxDist = mParams.cpHalfWidth + mParams.wallDetectDist;
+        const glm::vec2 rayDir{static_cast<float>(dir), 0.0f};
+        const Phys::QueryFilter filter{0xFFFFFFFFu, kCatWall};
+        for (const float sy : {pos.y - mParams.cpHalfHeight * 0.6f, pos.y,
+                               pos.y + mParams.cpHalfHeight * 0.6f})
+        {
+            const Phys::RaycastHit hit =
+                mPhys.RaycastClosest({pos.x, sy}, rayDir, maxDist, filter);
+            if (hit.hit)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     // 顶到角落时从最小推移开始两侧扫，找到第一处头部让开的 x 就吸附过去。
@@ -778,6 +917,22 @@ private:
                      glm::vec3(p.x + mParams.cpHalfWidth, feetY, 0.0f),
                      mGrounded ? kYellow : kGrey);
 
+        // —— 爬墙 overlay：贴墙侧竖线（grey=触墙 / cyan=下滑 / yellow=抓墙）——
+        if (mWallDir != 0)
+        {
+            const float wx = p.x + static_cast<float>(mWallDir) * mParams.cpHalfWidth;
+            const std::uint32_t wc = mGrabbing ? kYellow : (mSliding ? kCyan : kGrey);
+            dbg->AddLine(glm::vec3(wx, p.y - mParams.cpHalfHeight, 0.0f),
+                         glm::vec3(wx, p.y + mParams.cpHalfHeight, 0.0f), wc);
+        }
+        // 墙跳闪：从 cp 指向离墙方向的短线（离墙起跳瞬间）。
+        if (mWallJumpFlash > 0.0f)
+        {
+            dbg->AddLine(glm::vec3(p, 0.0f),
+                         glm::vec3(p.x + static_cast<float>(mWallJumpAwayDir) * 0.5f,
+                                   p.y + 0.2f, 0.0f), kWhite);
+        }
+
         // 速度向量（判据 #1：跟手延迟肉眼可读）。
         const glm::vec2 v = mCpState.velocity;
         dbg->AddLine(c3, glm::vec3(p + v * 0.1f, 0.0f), kMagenta);
@@ -845,6 +1000,9 @@ private:
     In::InputContext mInput;
     float            mMoveAxis = 0.0f;
     bool             mJumpHeld = false;
+    bool             mGrabHeld = false;      // 抓墙 hold
+    bool             mClimbUpHeld = false;   // 攀爬 ↑
+    bool             mClimbDownHeld = false; // 攀爬 ↓
 
     // 手感状态
     FeelParams       mParams;
@@ -853,6 +1011,18 @@ private:
     bool             mWasGrounded = false;
     float            mCoyoteTimer = 0.0f;
     float            mJumpBufferTimer = 0.0f;
+
+    // —— 爬墙状态 ——
+    int              mWallDir = 0;            // 当前贴墙方向：-1 左, +1 右, 0 无（供 overlay）
+    int              mLastWallDir = 0;        // 最近一次贴墙方向（wall coyote 窗口内墙跳用）
+    bool             mSliding = false;        // 贴墙下滑中（overlay）
+    bool             mGrabbing = false;       // 抓墙中（overlay）
+    float            mWallCoyoteTimer = 0.0f; // 离墙后墙跳宽限
+    float            mWallJumpLockTimer = 0.0f; // 墙跳后抑制回墙输入
+    int              mWallJumpAwayDir = 0;    // 墙跳离墙方向（锁定期抑制回墙加速）
+    float            mStamina = 0.0f;         // 剩余抓墙耐力 s
+    float            mWallJumpFlash = 0.0f;   // overlay：墙跳闪计时
+
     float            mLastHalfW = -1.0f;  // 触发首帧 ReplaceFixture 同步
     float            mLastHalfH = -1.0f;
 
