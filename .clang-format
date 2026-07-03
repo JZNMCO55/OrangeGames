@@ -1,0 +1,24 @@
+# Orange 代码风格（2026-07-03 用户约定）。关键非主流项：NamespaceIndentation: All
+# —— namespace 体缩进一级（保留嵌入阶级），有别于 Google/LLVM「不缩进」惯例。
+# ColumnLimit: 0 保留既有手工换行、不 reflow；对齐/指针左靠/不排序 include 均贴合现状。
+Language: Cpp
+BasedOnStyle: LLVM
+BreakBeforeBraces: Allman
+NamespaceIndentation: All
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 0
+PointerAlignment: Left
+ReferenceAlignment: Left
+AccessModifierOffset: -4
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveDeclarations: Consecutive
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+FixNamespaceComments: true
+ReflowComments: false
+SortIncludes: false
+IndentCaseLabels: true

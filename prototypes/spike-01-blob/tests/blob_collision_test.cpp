@@ -12,56 +12,70 @@
 namespace
 {
     // 复刻 main.cpp 的 LevelBox 关键字段（Blob::Step 只读 .min/.max）。
-    struct LevelBox { glm::vec2 min; glm::vec2 max; };
+    struct LevelBox
+    {
+        glm::vec2 min;
+        glm::vec2 max;
+    };
 
     // 复刻 main.cpp::MakeLevel()：平地 + 左右平台 + 窄缝两壁（同一份关卡几何）。
     std::vector<LevelBox> MakeLevel()
     {
         return {
-            {{-9.0f, -3.5f}, {9.0f, -3.0f}},   // 平地 top y=-3.0，厚 0.5
-            {{-6.0f, -0.7f}, {-2.5f, -0.5f}},  // 左平台
-            {{ 2.5f,  0.3f}, { 6.0f,  0.5f}},  // 右平台
-            {{-0.5f, -3.0f}, {-0.4f,  1.0f}},  // 窄缝左壁
-            {{ 0.4f, -3.0f}, { 0.5f,  1.0f}},  // 窄缝右壁
+            {{-9.0f, -3.5f}, {9.0f, -3.0f}},  // 平地 top y=-3.0，厚 0.5
+            {{-6.0f, -0.7f}, {-2.5f, -0.5f}}, // 左平台
+            {{2.5f, 0.3f}, {6.0f, 0.5f}},     // 右平台
+            {{-0.5f, -3.0f}, {-0.4f, 1.0f}},  // 窄缝左壁
+            {{0.4f, -3.0f}, {0.5f, 1.0f}},    // 窄缝右壁
         };
     }
 
     constexpr float kFixedDt   = 1.0f / 60.0f;
     constexpr float kGroundTop = -3.0f;
-}  // namespace
+} // namespace
 
 int main()
 {
     using spike01::Blob;
     using spike01::BlobParams;
 
-    const auto  level = MakeLevel();
-    BlobParams  params;  // 全默认（stiffness 200 / damping 8 / iters 8 / radius 0.5 / skin 0.03）
+    const auto level = MakeLevel();
+    BlobParams params; // 全默认（stiffness 200 / damping 8 / iters 8 / radius 0.5 / skin 0.03）
 
     // 落点选纯地面处（x=8，右平台 x≤6 之外、无窄缝墙），避免砸到平台混淆判据。
     const float     px = 8.0f;
-    const glm::vec2 cpRest{px, kGroundTop + 0.28f};  // 脚底贴地面 top → cp 中心 -2.72
+    const glm::vec2 cpRest{px, kGroundTop + 0.28f}; // 脚底贴地面 top → cp 中心 -2.72
 
-    int failures = 0;
-    auto check = [&](const char* tag, Blob& blob) {
-        const auto& bp = blob.Positions();
-        const int   n  = blob.PerimeterCount();
-        float lowest = std::numeric_limits<float>::max();
-        for (int i = 0; i < n; ++i) lowest = std::min(lowest, bp[i].y);
+    int  failures = 0;
+    auto check    = [&](const char* tag, Blob& blob)
+    {
+        const auto& bp     = blob.Positions();
+        const int   n      = blob.PerimeterCount();
+        float       lowest = std::numeric_limits<float>::max();
+        for (int i = 0; i < n; ++i)
+            lowest = std::min(lowest, bp[i].y);
         const glm::vec2 ctr = blob.Centroid();
         std::printf("[%s] 最低质点 y=%.4f | 质心 y=%.4f (地面 top=%.2f, box 底=-3.50)\n",
                     tag, lowest, ctr.y, kGroundTop);
         // 判据：最低点不得穿到地面 top 以下超过 skin + 余量；质心须明显高于地面 top。
-        if (lowest < kGroundTop - params.skin - 0.02f) { std::printf("  FAIL: 最低质点陷入地面下方\n"); ++failures; }
-        if (ctr.y  < kGroundTop)                       { std::printf("  FAIL: 质心陷到地面 top 以下\n");  ++failures; }
+        if (lowest < kGroundTop - params.skin - 0.02f)
+        {
+            std::printf("  FAIL: 最低质点陷入地面下方\n");
+            ++failures;
+        }
+        if (ctr.y < kGroundTop)
+        {
+            std::printf("  FAIL: 质心陷到地面 top 以下\n");
+            ++failures;
+        }
     };
 
     // A 真实着陆：cp 以 ~maxFallSpeed 落到静止位保持，blob 弹簧跟随冲进地面盒。
     {
-        Blob blob(14);
+        Blob      blob(14);
         glm::vec2 cp{px, -1.0f};
         blob.Reset(cp, params.blobRadius);
-        const float fall = 25.0f;  // maxFallSpeed 量级
+        const float fall = 25.0f; // maxFallSpeed 量级
         for (int step = 0; step < 600; ++step)
         {
             cp.y = std::max(cpRest.y, cp.y - fall * kFixedDt);
