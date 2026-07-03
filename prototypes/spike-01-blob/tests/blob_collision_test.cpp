@@ -11,25 +11,23 @@
 
 namespace
 {
+    // 复刻 main.cpp 的 LevelBox 关键字段（Blob::Step 只读 .min/.max）。
+    struct LevelBox { glm::vec2 min; glm::vec2 max; };
 
-// 复刻 main.cpp 的 LevelBox 关键字段（Blob::Step 只读 .min/.max）。
-struct LevelBox { glm::vec2 min; glm::vec2 max; };
+    // 复刻 main.cpp::MakeLevel()：平地 + 左右平台 + 窄缝两壁（同一份关卡几何）。
+    std::vector<LevelBox> MakeLevel()
+    {
+        return {
+            {{-9.0f, -3.5f}, {9.0f, -3.0f}},   // 平地 top y=-3.0，厚 0.5
+            {{-6.0f, -0.7f}, {-2.5f, -0.5f}},  // 左平台
+            {{ 2.5f,  0.3f}, { 6.0f,  0.5f}},  // 右平台
+            {{-0.5f, -3.0f}, {-0.4f,  1.0f}},  // 窄缝左壁
+            {{ 0.4f, -3.0f}, { 0.5f,  1.0f}},  // 窄缝右壁
+        };
+    }
 
-// 复刻 main.cpp::MakeLevel()：平地 + 左右平台 + 窄缝两壁（同一份关卡几何）。
-std::vector<LevelBox> MakeLevel()
-{
-    return {
-        {{-9.0f, -3.5f}, {9.0f, -3.0f}},   // 平地 top y=-3.0，厚 0.5
-        {{-6.0f, -0.7f}, {-2.5f, -0.5f}},  // 左平台
-        {{ 2.5f,  0.3f}, { 6.0f,  0.5f}},  // 右平台
-        {{-0.5f, -3.0f}, {-0.4f,  1.0f}},  // 窄缝左壁
-        {{ 0.4f, -3.0f}, { 0.5f,  1.0f}},  // 窄缝右壁
-    };
-}
-
-constexpr float kFixedDt   = 1.0f / 60.0f;
-constexpr float kGroundTop = -3.0f;
-
+    constexpr float kFixedDt   = 1.0f / 60.0f;
+    constexpr float kGroundTop = -3.0f;
 }  // namespace
 
 int main()
