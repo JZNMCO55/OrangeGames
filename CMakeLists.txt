@@ -24,6 +24,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # CMAKE_PREFIX_PATH 指向（典型：D:/sdk/orange-engine;D:/sdk/orange-render;D:/3rdparty）。
 find_package(OrangeEngine 0.1 CONFIG REQUIRED)
 
+# 单元测试（header-only 游戏逻辑的 headless 回归；不依赖引擎运行期）。
+# ctest 入口：`ctest --test-dir build`。
+enable_testing()
+
 # 首游 Spike 1 原型（流体史莱姆手感）。后续真正的游戏子项目按
 # games/<name>/ 平铺，prototypes/ 留给一次性手感 / 技术 spike。
 add_subdirectory(prototypes/spike-01-blob)

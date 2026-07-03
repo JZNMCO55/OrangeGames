@@ -28,3 +28,17 @@ if (ORANGE_ENGINE_SHADER_DIR)
             "$<TARGET_FILE_DIR:spike-01-blob>/shaders/orange_engine"
         COMMENT "Copying OrangeEngine builtin shaders next to spike-01-blob.exe")
 endif ()
+
+# ---- 软体 Blob 碰撞回归测试 ----
+# Blob.h header-only 只依赖 glm，故只连 glm::glm 不拉引擎（纯 headless 数值验）。
+find_package(glm CONFIG QUIET)
+if (glm_FOUND)
+    add_executable(spike-01-blob-tests tests/blob_collision_test.cpp)
+    target_link_libraries(spike-01-blob-tests PRIVATE glm::glm)
+    if (MSVC)  # 中文注释源、无 BOM → MSVC 须 /utf-8 避免按码页 936 误读
+        target_compile_options(spike-01-blob-tests PRIVATE /utf-8)
+    endif ()
+    add_test(NAME spike-01-blob.blob_collision COMMAND spike-01-blob-tests)
+else ()
+    message(STATUS "glm CONFIG 未找到 → 跳过 spike-01-blob 软体碰撞测试")
+endif ()

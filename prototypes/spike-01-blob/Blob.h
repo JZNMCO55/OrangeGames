@@ -262,13 +262,17 @@ private:
         }
     }
 
-    // 碰撞：每质点 vs 每关卡盒 AABB（按 skin 膨胀），点钻进盒内则投影到最近面。
-    // analytic 每质点投影：软体连续碰撞用它更省更稳，几何取自单一 mLevel（模板收）。
+    // 每质点 vs 关卡盒 AABB（skin 膨胀）投影出盒。出盒方向按入射面（质点上一子步
+    // mPrev 在盒外哪侧），不用"最浅穿透面"：地面盒薄，最浅面会把落地下陷的底部
+    // 质点从底面挤穿、困在地面下（陷地根因）；入射面恒把上方来的点弹回顶面。
     template <class LevelBoxT>
     void SatisfyCollision(const std::vector<LevelBoxT>& level, float skin)
     {
-        for (auto& pos : mPos)
+        const int total = static_cast<int>(mPos.size());
+        for (int i = 0; i < total; ++i)
         {
+            glm::vec2&      pos  = mPos[i];
+            const glm::vec2 prev = mPrev[i];  // 入射参照（本子步积分前位置）
             for (const auto& b : level)
             {
                 const float minx = b.min.x - skin;
@@ -279,27 +283,36 @@ private:
                 {
                     continue;  // 不在膨胀盒内
                 }
-                // 在盒内：投影到穿透最浅的那个面。
-                const float dxL = pos.x - minx;
+                const float dxL = pos.x - minx;  // 四面穿透深度
                 const float dxR = maxx - pos.x;
                 const float dyB = pos.y - miny;
                 const float dyT = maxy - pos.y;
-                const float m = std::min(std::min(dxL, dxR), std::min(dyB, dyT));
-                if (m == dxL)
+
+                // 入射面：prev 在盒外哪侧 → 从该侧出盒（每轴至多一侧）。
+                bool  haveX = false, haveY = false;
+                float penX = 0.0f, tgtX = 0.0f;
+                float penY = 0.0f, tgtY = 0.0f;
+                if (prev.x <= minx)      { haveX = true; penX = dxL; tgtX = minx; }
+                else if (prev.x >= maxx) { haveX = true; penX = dxR; tgtX = maxx; }
+                if (prev.y <= miny)      { haveY = true; penY = dyB; tgtY = miny; }
+                else if (prev.y >= maxy) { haveY = true; penY = dyT; tgtY = maxy; }
+
+                if (haveX && (!haveY || penX <= penY))
                 {
-                    pos.x = minx;
+                    pos.x = tgtX;
                 }
-                else if (m == dxR)
+                else if (haveY)
                 {
-                    pos.x = maxx;
-                }
-                else if (m == dyB)
-                {
-                    pos.y = miny;
+                    pos.y = tgtY;
                 }
                 else
                 {
-                    pos.y = maxy;
+                    // prev 也在盒内（无入射面，罕见/首帧）：退回最浅面兜底。
+                    const float m = std::min(std::min(dxL, dxR), std::min(dyB, dyT));
+                    if (m == dxL)      pos.x = minx;
+                    else if (m == dxR) pos.x = maxx;
+                    else if (m == dyB) pos.y = miny;
+                    else               pos.y = maxy;
                 }
             }
         }
