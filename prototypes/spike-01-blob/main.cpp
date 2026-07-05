@@ -69,6 +69,8 @@ using Orange::Engine::Render::Camera;
 using Orange::Engine::Render::DebugDrawScene;
 using Orange::Engine::Render::MaterialSystem;
 using Orange::Engine::Render::Pipeline;
+using Orange::Engine::Render::BloomPass;
+using Orange::Engine::Render::PostProcessChain;
 namespace In   = Orange::Engine::Input;
 namespace Phys = Orange::Engine::Physics;
 
@@ -226,6 +228,205 @@ namespace
         return std::max(cur - maxDelta, tgt);
     }
 
+    // glm 颜色 (0..1 RGB) → DebugDrawScene 的 packed ABGR uint32（低 8 位 = R）。
+    inline std::uint32_t PackColorABGR(const glm::vec3& c, float a = 1.0f)
+    {
+        auto q = [](float v)
+        { return static_cast<std::uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+        return (q(a) << 24) | (q(c.z) << 16) | (q(c.y) << 8) | q(c.x);
+    }
+
+    // 闭合 Catmull-Rom 平滑：把 N 点环每段插成 sub 段，让 blob 轮廓不那么 faceted。
+    // sub<=1 原样返回。
+    inline std::vector<glm::vec2> SmoothClosedCatmullRom(const std::vector<glm::vec2>& pts, int sub)
+    {
+        const int n = static_cast<int>(pts.size());
+        if (n < 3 || sub <= 1)
+        {
+            return pts;
+        }
+        std::vector<glm::vec2> out;
+        out.reserve(pts.size() * static_cast<std::size_t>(sub));
+        for (int i = 0; i < n; ++i)
+        {
+            const glm::vec2& p0 = pts[(i - 1 + n) % n];
+            const glm::vec2& p1 = pts[i];
+            const glm::vec2& p2 = pts[(i + 1) % n];
+            const glm::vec2& p3 = pts[(i + 2) % n];
+            for (int s = 0; s < sub; ++s)
+            {
+                const float t  = static_cast<float>(s) / static_cast<float>(sub);
+                const float t2 = t * t;
+                const float t3 = t2 * t;
+                out.push_back(0.5f * ((2.0f * p1) + (-p0 + p2) * t + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3));
+            }
+        }
+        return out;
+    }
+
+    // 实心史莱姆外观（全 live slider；debug 三角填充 + bloom 发光）。
+    //
+    // Tier 1 —— CPU 逐三角伪着色 gel：把 blob 内部细分成 rings×segments 个小四边形，
+    // 每个小面在 CPU 上算一遍"半球假法线 + dome 漫反 + Fresnel 亮边 + Blinn 高光 +
+    // 厚度驱动 SSS"，再平涂进 debug 三角（每三角单色，靠密度 + bloom 糊成渐变）。
+    // 逐像素平滑留给 Tier 2 自定义 fragment shader。参考图配色：深绿厚体 + 黄绿亮边 +
+    // 暖黄发光眼 + 体内黄绿光斑 + 落地绿辉光。
+    struct SlimeParams
+    {
+        bool fill      = true;
+        bool wireframe = false; // 保留 debug 线框作对照
+        bool beauty    = true;  // 展示模式：只画史莱姆(黑底)，隐藏关卡线框 + gameplay overlay
+
+        // —— 胶体分层色（厚→薄）——
+        glm::vec3 deepColor = {0.02f, 0.16f, 0.05f}; // 厚处深绿（核心底色，SSS 暗端 → 通透深度）
+        glm::vec3 bodyColor = {0.11f, 0.62f, 0.20f}; // 主体绿（略压亮度，让眼/边对比更强）
+        glm::vec3 rimColor  = {0.55f, 1.00f, 0.55f}; // Fresnel 亮边（黄绿）
+        glm::vec3 eyeColor  = {1.00f, 0.92f, 0.45f}; // 发光眼（暖黄，超 bloom 阈值强发光）
+        glm::vec3 speckColor = {0.85f, 1.00f, 0.42f}; // 体内漂浮光斑
+        glm::vec3 glowColor  = {0.18f, 0.85f, 0.28f}; // 落地接触辉光
+
+        // —— 伪光照 ——
+        glm::vec3 lightDir  = {-0.35f, 0.85f, 0.42f}; // 主光方向（左上偏前，对齐参考图高光）
+        float     specPower = 32.0f;                  // Blinn 高光锐度
+        float     specGain  = 1.15f;                  // 高光强度（脆亮湿润感）
+        float     rimPower  = 3.0f;                   // Fresnel 指数（越大边越窄）
+        float     rimGain   = 0.85f;                  // Fresnel 亮边强度
+        float     ambient   = 0.30f;                  // 环境光基线（暗部不全黑）
+
+        // —— 网格密度 / 细节 ——
+        int   rings         = 12; // 径向环数（越多 banding 越少）
+        int   silhouetteSub = 3;  // 轮廓 Catmull-Rom 段数（受 DebugDraw 4096 顶点上限约束）
+        bool  drawEyes      = true;
+        bool  drawSpecks    = true;
+        bool  drawContactGlow = true;
+        float eyeSize       = 0.21f; // 眼高（相对 blob 半径；参考图眼是竖高亮条）
+    };
+
+    // 固定体内光斑局部偏移（单位圆内、偏下半区）——确定性布点，无运行时随机。
+    constexpr int kSpeckCount = 14;
+    constexpr glm::vec2 kSpeckLocal[kSpeckCount] = {
+        {-0.35f, -0.30f}, {0.20f, -0.45f}, {-0.10f, -0.55f}, {0.42f, -0.20f},
+        {-0.50f, -0.05f}, {0.05f, -0.28f}, {0.30f, -0.60f}, {-0.25f, -0.62f},
+        {0.52f, -0.36f}, {-0.55f, -0.40f}, {0.15f, -0.72f}, {-0.05f, -0.44f},
+        {0.36f, -0.50f}, {-0.40f, -0.56f}};
+
+    // 单个小面（径向位置 tm∈[0,1]、方向 dir）的伪 gel 着色：半球假法线 →
+    // dome 漫反 + Blinn 高光 + Fresnel 亮边 + 厚度 SSS。返回 clamp 到 [0,1] 的线性 RGB。
+    inline glm::vec3 ShadeGel(glm::vec2 dir, float tm, const SlimeParams& s,
+                              const glm::vec3& L, const glm::vec3& H)
+    {
+        const float nz   = std::sqrt(std::max(0.0f, 1.0f - tm * tm)); // 半球高度：中心 1 → 边 0
+        const glm::vec3 n = glm::normalize(glm::vec3(dir.x * tm, dir.y * tm, nz));
+        const float diff = std::clamp(glm::dot(n, L), 0.0f, 1.0f);
+        const float spec = std::pow(std::clamp(glm::dot(n, H), 0.0f, 1.0f), s.specPower);
+        const float fres = std::pow(1.0f - std::clamp(nz, 0.0f, 1.0f), s.rimPower);
+        // 厚度 SSS：厚(center)取深绿、薄(edge)取亮体色。
+        glm::vec3 col = glm::mix(s.deepColor, s.bodyColor, tm);
+        col *= (s.ambient + (1.0f - s.ambient) * diff);   // dome 漫反
+        col += s.rimColor * (fres * s.rimGain);           // Fresnel 亮边
+        col += glm::vec3(1.0f) * (spec * s.specGain);     // 湿润高光
+        return glm::clamp(col, glm::vec3(0.0f), glm::vec3(1.0f));
+    }
+
+    // 实心椭圆（三角扇），单色。用于发光眼 / 光斑 / 接触辉光。
+    inline void FillEllipse(DebugDrawScene* dbg, glm::vec2 c, float rx, float ry,
+                            std::uint32_t color, int seg = 16)
+    {
+        const float kTwoPi = 6.28318530718f;
+        glm::vec3   prev(c.x + rx, c.y, 0.0f);
+        for (int i = 1; i <= seg; ++i)
+        {
+            const float a = kTwoPi * static_cast<float>(i) / static_cast<float>(seg);
+            glm::vec3   cur(c.x + std::cos(a) * rx, c.y + std::sin(a) * ry, 0.0f);
+            dbg->AddTriangle(glm::vec3(c, 0.0f), prev, cur, color);
+            prev = cur;
+        }
+    }
+
+    // 把软体 blob 渲成"史莱姆 gel"：接触辉光 → 内部 rings×segments 逐面着色 →
+    // 体内光斑 → 发光眼。全部平涂进 debug 三角（HDR + bloom 前），靠密度 + bloom 糊成渐变。
+    void EmitSlimeGel(DebugDrawScene* dbg, const std::vector<glm::vec2>& ring,
+                      glm::vec2 center, const SlimeParams& s, float t)
+    {
+        const int m = static_cast<int>(ring.size());
+        if (m < 3)
+        {
+            return;
+        }
+        // 平均半径 + 最低点（接触辉光锚点）。
+        float avgR = 0.0f, bottomY = ring[0].y;
+        for (const auto& p : ring)
+        {
+            avgR += glm::length(p - center);
+            bottomY = std::min(bottomY, p.y);
+        }
+        avgR /= static_cast<float>(m);
+        if (avgR < 1e-4f)
+        {
+            return;
+        }
+
+        const glm::vec3 L = glm::normalize(s.lightDir);
+        const glm::vec3 V(0.0f, 0.0f, 1.0f);
+        const glm::vec3 H = glm::normalize(L + V);
+
+        // —— 1. 接触辉光（body 之前画，作底部光晕）——
+        if (s.drawContactGlow)
+        {
+            FillEllipse(dbg, glm::vec2(center.x, bottomY + avgR * 0.05f),
+                        avgR * 1.15f, avgR * 0.22f, PackColorABGR(s.glowColor, 1.0f), 20);
+        }
+
+        // —— 2. 内部 rings×segments 逐面着色 ——
+        const int R = std::max(2, s.rings);
+        for (int i = 0; i < m; ++i)
+        {
+            const glm::vec2 da  = ring[i] - center;
+            const glm::vec2 db  = ring[(i + 1) % m] - center;
+            const glm::vec2 dir = glm::normalize(0.5f * (da + db));
+            for (int r = 0; r < R; ++r)
+            {
+                const float t0 = static_cast<float>(r) / static_cast<float>(R);
+                const float t1 = static_cast<float>(r + 1) / static_cast<float>(R);
+                const float tm = 0.5f * (t0 + t1);
+                const glm::vec3 col = ShadeGel(dir, tm, s, L, H);
+                const std::uint32_t c = PackColorABGR(col, 1.0f);
+                const glm::vec3 a0(center + da * t0, 0.0f);
+                const glm::vec3 a1(center + da * t1, 0.0f);
+                const glm::vec3 b0(center + db * t0, 0.0f);
+                const glm::vec3 b1(center + db * t1, 0.0f);
+                dbg->AddTriangle(a0, a1, b1, c);
+                dbg->AddTriangle(a0, b1, b0, c);
+            }
+        }
+
+        // —— 3. 体内漂浮光斑（缓慢上浮 + 明灭）——
+        if (s.drawSpecks)
+        {
+            for (int k = 0; k < kSpeckCount; ++k)
+            {
+                const float     ph   = static_cast<float>(k) * 1.7f;
+                const glm::vec2 off  = kSpeckLocal[k] * avgR * 0.9f +
+                                      glm::vec2(0.0f, std::sin(t * 0.6f + ph) * avgR * 0.03f);
+                const float     tw   = 0.6f + 0.4f * std::sin(t * 1.3f + ph); // 明灭
+                FillEllipse(dbg, center + off, avgR * 0.045f, avgR * 0.06f,
+                            PackColorABGR(s.speckColor * tw, 1.0f), 8);
+            }
+        }
+
+        // —— 4. 发光眼（最上层；轻微呼吸缩放 → bloom 强发光）——
+        if (s.drawEyes)
+        {
+            const float     pulse = 1.0f + 0.05f * std::sin(t * 2.5f);
+            const float     rx    = s.eyeSize * 0.45f * avgR;
+            const float     ry    = s.eyeSize * pulse * avgR;
+            const glm::vec2 up    = glm::vec2(0.0f, avgR * 0.30f);
+            const std::uint32_t eyeC = PackColorABGR(s.eyeColor, 1.0f);
+            FillEllipse(dbg, center + up + glm::vec2(-avgR * 0.26f, 0.0f), rx, ry, eyeC, 14);
+            FillEllipse(dbg, center + up + glm::vec2(avgR * 0.26f, 0.0f), rx, ry, eyeC, 14);
+        }
+    }
+
     // ===========================================================================
     // SpikeLayer —— Loop A 全部逻辑（输入 + 固定步长物理 + 手感 + overlay + 调参面板）。
     // ===========================================================================
@@ -233,8 +434,8 @@ namespace
     {
     public:
         SpikeLayer(Pipeline& pipeline, World& world, Phys::PhysicsWorld& phys,
-                   Phys::BodyHandle cp, std::vector<LevelBox> level)
-            : Layer("SpikeLayer"), mPipeline(pipeline), mWorld(world), mPhys(phys), mCp(cp), mLevel(std::move(level))
+                   Phys::BodyHandle cp, std::vector<LevelBox> level, BloomPass* bloom = nullptr)
+            : Layer("SpikeLayer"), mPipeline(pipeline), mWorld(world), mPhys(phys), mCp(cp), mLevel(std::move(level)), mpBloom(bloom)
         {
             BuildActionMap();
             mVxHistory.fill(0.0f);
@@ -281,6 +482,7 @@ namespace
             // —— 固定步长物理（accumulator，与渲染帧率解耦）——
             float dt = frame.time.deltaSeconds;
             dt       = std::clamp(dt, 0.0f, kMaxFrameDt);
+            mRenderTime += dt; // gel 光斑漂移 / 眼呼吸 / 高光脉动（视觉动画，与物理步无关）
             mAccumulator += dt;
             mStepsThisFrame = 0;
             while (mAccumulator >= kFixedDt)
@@ -469,6 +671,50 @@ namespace
                 ImGui::Checkbox("画 control point 标记", &mBlobParams.drawCpMarker);
                 ImGui::Text("质点数: %d perimeter + 1 center (固定, 改在 Blob 构造)",
                             mBlob.PerimeterCount());
+            }
+            if (ImGui::CollapsingHeader("史莱姆 gel 外观 (Tier 1 CPU 着色)", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                ImGui::Checkbox("实心填充", &mSlime.fill);
+                ImGui::SameLine();
+                ImGui::Checkbox("线框对照", &mSlime.wireframe);
+                ImGui::SameLine();
+                ImGui::Checkbox("beauty(纯史莱姆黑底)", &mSlime.beauty);
+
+                ImGui::SeparatorText("胶体分层色");
+                ImGui::ColorEdit3("深绿(厚)", &mSlime.deepColor.x);
+                ImGui::ColorEdit3("主体绿", &mSlime.bodyColor.x);
+                ImGui::ColorEdit3("Fresnel 亮边", &mSlime.rimColor.x);
+                ImGui::ColorEdit3("发光眼", &mSlime.eyeColor.x);
+                ImGui::ColorEdit3("体内光斑", &mSlime.speckColor.x);
+                ImGui::ColorEdit3("接触辉光", &mSlime.glowColor.x);
+
+                ImGui::SeparatorText("伪光照 / 细节");
+                ImGui::SliderFloat3("主光方向", &mSlime.lightDir.x, -1.0f, 1.0f);
+                ImGui::SliderFloat("环境基线", &mSlime.ambient, 0.0f, 1.0f);
+                ImGui::SliderFloat("高光锐度", &mSlime.specPower, 4.0f, 80.0f);
+                ImGui::SliderFloat("高光强度", &mSlime.specGain, 0.0f, 2.0f);
+                ImGui::SliderFloat("Fresnel 指数", &mSlime.rimPower, 1.0f, 8.0f);
+                ImGui::SliderFloat("Fresnel 强度", &mSlime.rimGain, 0.0f, 2.0f);
+                ImGui::SliderInt("径向环数", &mSlime.rings, 2, 24);
+                ImGui::SliderInt("轮廓平滑段数", &mSlime.silhouetteSub, 1, 8);
+                ImGui::SliderFloat("眼大小", &mSlime.eyeSize, 0.05f, 0.4f);
+                ImGui::Checkbox("眼", &mSlime.drawEyes);
+                ImGui::SameLine();
+                ImGui::Checkbox("光斑", &mSlime.drawSpecks);
+                ImGui::SameLine();
+                ImGui::Checkbox("接触辉光", &mSlime.drawContactGlow);
+
+                if (mpBloom)
+                {
+                    ImGui::SeparatorText("发光 (bloom 亮部晕开)");
+                    ImGui::SliderFloat("bloom 阈值 (越低越易发光)", &mpBloom->threshold, 0.0f, 1.5f);
+                    ImGui::SliderFloat("bloom 强度", &mpBloom->intensity, 0.0f, 2.0f);
+                    ImGui::TextDisabled("8-bit 色上限=白; 靠调低阈值让亮色进 bloom。");
+                }
+                else
+                {
+                    ImGui::TextDisabled("(bloom pass 未接入)");
+                }
             }
 
             // —— apex 分叉读数（spec 核心产出 = "果冻预算"）——
@@ -901,6 +1147,10 @@ namespace
                 return;
             }
 
+            // beauty 展示模式：隐藏关卡线框 + 所有 gameplay overlay，只留史莱姆(黑底)对齐参考图。
+            // 关掉即恢复 Loop A/B 全部调试可视（cp 框 / 速度 / 落点 / apex 分叉线）。
+            if (!mSlime.beauty)
+            {
             // 静态世界（debug 线保留作可视参照；同时就是真 Box2D 碰撞体的轮廓）。
             for (const auto& b : mLevel)
             {
@@ -961,39 +1211,56 @@ namespace
                 dbg->AddLine(glm::vec3(lp.x, lp.y, 0.0f),
                              glm::vec3(lp.x, lp.y + 0.35f, 0.0f), kAmber);
             }
+            } // if (!mSlime.beauty)
 
-            // —— Loop B：软体 blob（主可见物，纯 debug 线框 + 纯色，spec 硬纪律 feel 在前）——
+            // —— Loop B：软体 blob（主可见物 = 史莱姆 gel 渲染）——
             if (mBlob.Initialized())
             {
                 const auto& bp = mBlob.Positions();
                 const int   n  = mBlob.PerimeterCount();
 
-                // perimeter 闭合 loop 线。
-                for (int i = 0; i < n; ++i)
+                // —— Tier 0 实心史莱姆：中心扇形填充 + 2 环径向渐变（core→edge）——
+                // AddTriangle 输出到 HDR target、在 bloom 之前 → 亮色自动晕开发光
+                // （见 DebugDrawScene 头 18-23 行）。轮廓经 Catmull-Rom 平滑去 faceted。
+                if (mSlime.fill)
                 {
-                    const int j = (i + 1) % n;
-                    dbg->AddLine(glm::vec3(bp[i], 0.0f), glm::vec3(bp[j], 0.0f), kBlob);
+                    std::vector<glm::vec2>       peri(bp.begin(), bp.begin() + n);
+                    const std::vector<glm::vec2> ring = SmoothClosedCatmullRom(peri, mSlime.silhouetteSub);
+                    const glm::vec2              ctr  = bp[mBlob.CenterIndex()];
+                    EmitSlimeGel(dbg, ring, ctr, mSlime, mRenderTime);
                 }
-                // center 辐条（可选；展示内部约束结构）。
-                if (mBlobParams.drawSpokes)
+
+                // debug 线框（perimeter loop + 辐条）：填充上线后默认关，作对照可开。
+                if (mSlime.wireframe)
                 {
-                    const glm::vec3 ctr(bp[mBlob.CenterIndex()], 0.0f);
                     for (int i = 0; i < n; ++i)
                     {
-                        dbg->AddLine(ctr, glm::vec3(bp[i], 0.0f), kSpoke);
+                        const int j = (i + 1) % n;
+                        dbg->AddLine(glm::vec3(bp[i], 0.0f), glm::vec3(bp[j], 0.0f), kBlob);
+                    }
+                    if (mBlobParams.drawSpokes)
+                    {
+                        const glm::vec3 ctr(bp[mBlob.CenterIndex()], 0.0f);
+                        for (int i = 0; i < n; ++i)
+                        {
+                            dbg->AddLine(ctr, glm::vec3(bp[i], 0.0f), kSpoke);
+                        }
                     }
                 }
 
                 // apex 分叉 overlay（spec 核心产出）：control point ↔ blob 视觉质心
-                // 连线 + 质心十字标记。连线越长 = 果冻越"骗人"，这就是要量的预算。
-                const glm::vec3 cpw(mCpState.position, 0.0f);
-                const glm::vec3 ctw(mBlobCentroid, 0.0f);
-                dbg->AddLine(cpw, ctw, kDiverge);
-                constexpr float km = 0.08f;
-                dbg->AddLine(ctw - glm::vec3(km, 0.0f, 0.0f), ctw + glm::vec3(km, 0.0f, 0.0f),
-                             kCentroid);
-                dbg->AddLine(ctw - glm::vec3(0.0f, km, 0.0f), ctw + glm::vec3(0.0f, km, 0.0f),
-                             kCentroid);
+                // 连线 + 质心十字标记。连线越长 = 果冻越"骗人"，这就是要量的预算。beauty 模式隐藏。
+                if (!mSlime.beauty)
+                {
+                    const glm::vec3 cpw(mCpState.position, 0.0f);
+                    const glm::vec3 ctw(mBlobCentroid, 0.0f);
+                    dbg->AddLine(cpw, ctw, kDiverge);
+                    constexpr float km = 0.08f;
+                    dbg->AddLine(ctw - glm::vec3(km, 0.0f, 0.0f), ctw + glm::vec3(km, 0.0f, 0.0f),
+                                 kCentroid);
+                    dbg->AddLine(ctw - glm::vec3(0.0f, km, 0.0f), ctw + glm::vec3(0.0f, km, 0.0f),
+                                 kCentroid);
+                }
             }
         }
 
@@ -1003,6 +1270,8 @@ namespace
         Phys::PhysicsWorld&   mPhys;
         Phys::BodyHandle      mCp;
         std::vector<LevelBox> mLevel;
+        BloomPass*            mpBloom = nullptr; // Tier 0 slime glow：live 调 bloom 阈值/强度
+        SlimeParams           mSlime;            // Tier 0 实心史莱姆外观
 
         // 输入
         In::InputContext mInput;
@@ -1037,6 +1306,7 @@ namespace
         // 物理累加器
         float mAccumulator    = 0.0f;
         int   mStepsThisFrame = 0;
+        float mRenderTime     = 0.0f; // 视觉动画时钟（gel 光斑/眼/高光；与固定物理步解耦）
 
         // 对外快照（Loop B）
         ControlPointState mCpState;
@@ -1095,12 +1365,14 @@ int main()
     // 正交 2D 相机：一屏覆盖约 16×9 世界单位，正对 XY 平面（沿 -Z 看）。
     Entity camEntity = world.CreateEntity();
     {
-        const float halfH  = 5.0f;
+        // 拉近对准史莱姆静止区（出生点 (-5,-2.5) 落到平地顶 y=-3 上，静止约 (-5,-2.45)）——
+        // 本阶段是"实体渲染"showcase，相机聚焦主角看清 gel 外观；后续加 follow-cam 另说。
+        const float halfH  = 1.9f;
         const float aspect = static_cast<float>(cfg.window.width) / static_cast<float>(cfg.window.height);
         const float halfW  = halfH * aspect;
+        const glm::vec3 focus(-5.0f, -2.15f, 0.0f);
         Camera      cam    = Camera::Orthographic(-halfW, halfW, -halfH, halfH, 0.1f, 100.0f);
-        cam.view           = glm::lookAt(glm::vec3(0.0f, 0.0f, 10.0f),
-                                         glm::vec3(0.0f, 0.0f, 0.0f),
+        cam.view           = glm::lookAt(focus + glm::vec3(0.0f, 0.0f, 10.0f), focus,
                                          glm::vec3(0.0f, 1.0f, 0.0f));
         world.AddComponent(camEntity, cam);
     }
@@ -1170,6 +1442,11 @@ int main()
     }
     pipeline.SetMaterialSystem(&materials);
 
+    // 史莱姆 showcase 背景：关程序化天空 + 场景清到近黑(略带暗绿)，让 gel 在暗底上发光，
+    // 对齐参考图纯黑森林调。运行时 beauty 关掉仍是这背景（关卡线框自会画回来）。
+    pipeline.SetSkyEnabled(false);
+    pipeline.SetSceneClearColor(0.012f, 0.020f, 0.016f);
+
     // 接通引擎托管 ImGui overlay + 把 LayerStack 的 OnImGui 派发接进来（调参面板）。
     if (auto im = pipeline.EnableImGui(); im.IsErr())
     {
@@ -1180,7 +1457,20 @@ int main()
     pipeline.SetImGuiSubmit([h = host.get()]()
                             { h->DispatchImGui(); });
 
-    host->PushLayer(std::make_unique<SpikeLayer>(pipeline, world, physWorld, cpBody, level));
+    // —— Tier 0 slime glow：加 bloom 后处理链（消费者侧，与 sample 08 同路）——
+    // 史莱姆填充色走 HDR target，bloom 把亮部晕开成发光。chain 须活到 Run() 结束。
+    PostProcessChain slimeChain = Orange::Engine::Render::BuiltinPostProcessChain::CreateDefault();
+    BloomPass*       slimeBloom = dynamic_cast<BloomPass*>(slimeChain.FindByName("bloom"));
+    if (slimeBloom)
+    {
+        // 阈值偏高：只让 Fresnel 亮边 / 眼 / 高光进 bloom，body 主体保留 dome 渐变不被洗白
+        //（对齐参考图"深绿通透 body + 眼强对比跳出"的层次）。
+        slimeBloom->threshold = 0.72f;
+        slimeBloom->intensity = 0.85f;
+    }
+    pipeline.SetPostProcessChain(&slimeChain);
+
+    host->PushLayer(std::make_unique<SpikeLayer>(pipeline, world, physWorld, cpBody, level, slimeBloom));
 
     const int rc = host->Run();
     pipeline.Shutdown();
