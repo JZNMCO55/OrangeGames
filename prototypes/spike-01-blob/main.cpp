@@ -31,29 +31,16 @@
 // 注意：运行需要引擎 builtin shader 在 .exe 旁（shaders/orange_engine/*.spv），
 // 由 CMakeLists.txt 的 ORANGE_ENGINE_SHADER_DIR workaround 在 build 时 copy。
 
-#include <orange/engine/app/AppConfig.h>
-#include <orange/engine/app/AppHost.h>
-#include <orange/engine/app/FrameContext.h>
-#include <orange/engine/app/Layer.h>
-#include <orange/engine/asset/AssetRegistry.h>
-#include <orange/engine/asset/ShaderAsset.h>
-#include <orange/engine/asset/ShaderLoader.h>
-#include <orange/engine/input/Action.h>
-#include <orange/engine/input/ActionMap.h>
-#include <orange/engine/input/InputContext.h>
-#include <orange/engine/input/InputDevice.h>
-#include <orange/engine/physics/BodyHandle.h>
-#include <orange/engine/physics/ColliderComponent.h>
-#include <orange/engine/physics/ColliderDesc.h>
-#include <orange/engine/physics/PhysicsWorld.h>
-#include <orange/engine/physics/RigidBodyComponent.h>
-#include <orange/engine/platform/WindowEvent.h>
-#include <orange/engine/render/Camera.h>
-#include <orange/engine/render/DebugDrawScene.h>
-#include <orange/engine/render/MaterialSystem.h>
-#include <orange/engine/render/Pipeline.h>
-#include <orange/engine/scene/Entity.h>
-#include <orange/engine/scene/World.h>
+// 引擎公共 API 经便利头收敛引入（prelude 精选核心 + 各子系统聚合头），
+// 替代逐个 <orange/engine/<mod>/*> 罗列。prelude 已含 World/Entity/Transform/
+// Name + FrameContext/Layer + Log/Time + glm 核心；其余按用到的子系统取。
+#include <orange/engine/prelude.h>
+#include <orange/engine/app.h>
+#include <orange/engine/asset.h>
+#include <orange/engine/input.h>
+#include <orange/engine/physics.h>
+#include <orange/engine/platform.h>
+#include <orange/engine/render.h>
 
 // 消费者自行 #include <imgui.h>（引擎把 imgui include 目录 PUBLIC 暴露，
 // 公共头本身零 imgui 类型；GAP-2026-05-27-consumer-imgui-tuning-hook 已补完）。
