@@ -33,6 +33,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace spike01
@@ -210,7 +211,10 @@ namespace spike01
         // 退 Play：拆 control point + 关卡 body、清运行态；SDF pass 常驻（仅禁用避免 edit 态残帧）。
         void OnExitPlay(Orange::Engine::Game::GameModuleContext& ctx) override;
 
-        // ComponentSerializers 用基类默认空实现（手感参数暂内置、未组件化）。
+        // 交出 SlimeTuningComponent 序列化器 → 宿主 merge 进 extraSerializers，令手感
+        // 组件随场景 / Play-Stop 快照 round-trip（否则进 Play 时 Edit 世界种的组件丢失）。
+        std::span<const Orange::Engine::Scene::ComponentSerializerEntry>
+        ComponentSerializers() const override;
 
         // Loop B 软体 blob 每帧读此快照弹簧吸附 control point（对外只读）。
         const ControlPointState& GetControlPoint() const noexcept
@@ -254,6 +258,10 @@ namespace spike01
 
         // 拆卸本模块 OnEnterPlay 加进物理世界的全部 body（control point + 关卡）。
         void TearDownBodies();
+
+        // 从 Edit 世界第一个挂 SlimeTuningComponent 的实体读手感覆盖内置默认值
+        //（OnEnterPlay 在建 body / Blob.Reset 之前调；无组件 / 无 World 则维持默认）。
+        void ApplyTuningOverrides(Orange::Engine::World* pWorld);
 
         // —— 宿主经 GameModuleContext 传入的引擎引用（OnEnterPlay 存、Tick 复用）——
         Orange::Engine::Physics::PhysicsWorld* mpPhysics  = nullptr;

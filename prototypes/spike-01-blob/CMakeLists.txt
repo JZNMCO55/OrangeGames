@@ -5,7 +5,7 @@
 # 开窗 + debug draw"这条消费链路；手感 Loop A / 软体 blob / 调参面板尚未
 # 落地——调参面板待引擎补完 GAP-2026-05-27-consumer-imgui-tuning-hook
 # （消费者 ImGui hook）后再接。
-add_executable(spike-01-blob main.cpp SlimeMetaballPass.cpp)
+add_executable(spike-01-blob main.cpp SlimeMetaballPass.cpp SlimeTuningComponent.cpp)
 
 # Tier 2 M0：自定义 SDF fragment pass 直接下沉到 RHI（IRenderPass 是引擎明确开放的
 # 逃生舱口）。只链公共 SDK OrangeRender::orange_render，绝不碰 internals / backend 私有头。
@@ -75,7 +75,9 @@ find_package(OrangeEditor 1.3 CONFIG REQUIRED)
 add_executable(SlimeEditor
     SlimeEditorMain.cpp
     SlimeGameModule.cpp
-    SlimeMetaballPass.cpp)
+    SlimeMetaballPass.cpp
+    SlimeTuningComponent.cpp
+    SlimeTuningSchema.cpp)
 target_link_libraries(SlimeEditor PRIVATE
     OrangeEditor::orange_editor
     OrangeEngine::orange_engine

@@ -4,12 +4,14 @@
 
 #include "SlimeGameModule.h"
 #include "SlimeMetaballPass.h"
+#include "SlimeTuningComponent.h"
 
 // consumer 侧经便利聚合头引入引擎公共 API（与 main.cpp 同路）。
 #include <orange/engine/input.h>
 #include <orange/engine/physics.h>
 #include <orange/engine/platform.h>
 #include <orange/engine/render.h>
+#include <orange/engine/scene/World.h> // ApplyTuningOverrides 遍历 entt view
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -19,6 +21,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
+#include <span>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -304,6 +307,11 @@ namespace spike01
         mpPhysics  = ctx.pPhysics;
         mpPipeline = ctx.pPipeline;
 
+        // 手感组件化：Edit 世界里挂的 SlimeTuningComponent 覆盖内置默认值。必须在建
+        // control point / Blob.Reset 之前——blobRadius 要在 Reset 时进 rest 几何、
+        // SDF 渲染半径也读 mBlobParams.blobRadius，才真正改变史莱姆大小。
+        ApplyTuningOverrides(ctx.pWorld);
+
         // 无物理世界（headless / 宿主未装配）→ graceful 退化，不建 body。
         if (!mpPhysics)
         {
@@ -536,6 +544,36 @@ namespace spike01
             mpPhysics->RemoveBody(h);
         }
         mLevelBodies.clear();
+    }
+
+    std::span<const Scene::ComponentSerializerEntry> SlimeGameModule::ComponentSerializers() const
+    {
+        // 单元素静态表：GetSlimeTuningSerializerEntry() 返回 program 生命周期 static，
+        // 拷进本表后 span 视图活到进程退出（宿主 Save/Load 期只读）。追加游戏组件时扩表即可。
+        static const std::array<Scene::ComponentSerializerEntry, 1> kEntries{
+            GetSlimeTuningSerializerEntry(),
+        };
+        return kEntries;
+    }
+
+    void SlimeGameModule::ApplyTuningOverrides(World* pWorld)
+    {
+        if (!pWorld)
+        {
+            return; // headless / 宿主未装配 World → 维持内置默认手感
+        }
+        // 只取第一个挂 SlimeTuningComponent 的实体（spike 单史莱姆，多实体取先遇者）。
+        auto view = pWorld->Registry().view<SlimeTuningComponent>();
+        for (const auto e : view)
+        {
+            const SlimeTuningComponent& c = view.get<SlimeTuningComponent>(e);
+            mParams.jumpSpeed             = c.jumpSpeed;
+            mParams.maxRunSpeed           = c.maxRunSpeed;
+            mParams.riseGravity           = c.riseGravity;
+            mParams.fallGravity           = c.fallGravity;
+            mBlobParams.blobRadius        = c.blobRadius; // 进 Blob.Reset rest 几何 + SDF 半径
+            break;
+        }
     }
 
     // ===========================================================================

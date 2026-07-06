@@ -1,0 +1,38 @@
+// SlimeTuningComponent 的 Inspector schema 注册（editor-only，照 HealthComponent 模式）。
+// Range/DragSpeed 给每个手感字段 slider 上下限 + 拖拽步进；Addable/Removable 挂
+// component 级 +Add / 右键移除。
+
+#include "SlimeTuningSchema.h"
+#include "SlimeTuningComponent.h"
+
+#include <schema/ComponentSchemaRegistry.h> // orange_editor SDK 头树（include/orange_editor 在 include path）
+
+namespace spike01
+{
+
+    void RegisterSlimeTuningSchema()
+    {
+        using namespace Orange::Editor::Schema;
+
+        ComponentSchemaBuilder<SlimeTuningComponent>("SlimeTuningComponent", "Slime Tuning")
+            .Field<&SlimeTuningComponent::blobRadius>("blobRadius", "Blob Radius")
+            .Range(0.2f, 1.2f)
+            .DragSpeed(0.005f)
+            .Field<&SlimeTuningComponent::jumpSpeed>("jumpSpeed", "Jump Speed")
+            .Range(4.0f, 30.0f)
+            .DragSpeed(0.1f)
+            .Field<&SlimeTuningComponent::maxRunSpeed>("maxRunSpeed", "Max Run Speed")
+            .Range(2.0f, 20.0f)
+            .DragSpeed(0.1f)
+            .Field<&SlimeTuningComponent::riseGravity>("riseGravity", "Rise Gravity")
+            .Range(10.0f, 120.0f)
+            .DragSpeed(0.5f)
+            .Field<&SlimeTuningComponent::fallGravity>("fallGravity", "Fall Gravity")
+            .Range(10.0f, 150.0f)
+            .DragSpeed(0.5f)
+            .Addable()
+            .Removable()
+            .Register();
+    }
+
+} // namespace spike01
