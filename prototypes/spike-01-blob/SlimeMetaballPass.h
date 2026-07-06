@@ -47,6 +47,7 @@ namespace spike01
         // 与最近 2 帧用的 slot 恒不同，避免写正被 GPU 读的内存。
         static constexpr std::uint32_t kFramesInFlight = 3;
         static constexpr int           kMaxPoints      = 16;
+        static constexpr int           kMaxDroplets    = 8; // juice 额外 metaball 点上限
 
         SlimeMetaballPass();
         ~SlimeMetaballPass() override; // 在 .cpp defaulted，让 RHI unique_ptr 成员析构在完整类型下实例化
@@ -86,17 +87,23 @@ namespace spike01
         // mRenderTime（与物理步解耦的视觉时钟）。Execute 写进 UBO。
         void SetTime(float seconds) noexcept { mTime = seconds; }
 
+        // juice：每帧喂额外 metaball 点（落地溅射 / 分裂 / 合并的水滴，世界坐标 + 世界半径）。
+        // 独立于 blob 14+1 质点；shader 累加进同一 field 与主体天然 smin 融合 / 断开。
+        // count 超 kMaxDroplets 截断。传 count=0（或不调）= 无 droplet。
+        void SetDroplets(const glm::vec2* pos, const float* radius, int count);
+
     private:
         // std140 UBO，与 slime_metaball.frag 逐字对齐：
-        // mat4(64) + vec4×4(64) + vec4[16](256) = 384B。
+        // mat4(64) + vec4×4(64) + vec4[16](256) + vec4[8](128) = 512B。
         struct SlimeUbo
         {
-            float uViewProj[16];          // world -> clip（= ctx.pViewProjData）
-            float uParams0[4];            // x=count, y=isoLevel, z=aspect, w=falloffRadius(ndc-y)
-            float uParams1[4];            // x=blobNdcRadius, y=domeScale, z=rimGain, w=specGain
-            float uParams2[4];            // x=ambient, y=time, z=eyeGain, w=speckGain
-            float uParams3[4];            // x=glowGain（其余备用）
-            float uPoints[kMaxPoints][4]; // xy=world pos（末尾一个是 centroid）
+            float uViewProj[16];            // world -> clip（= ctx.pViewProjData）
+            float uParams0[4];              // x=count, y=isoLevel, z=aspect, w=falloffRadius(ndc-y)
+            float uParams1[4];              // x=blobNdcRadius, y=domeScale, z=rimGain, w=specGain
+            float uParams2[4];              // x=ambient, y=time, z=eyeGain, w=speckGain
+            float uParams3[4];              // x=glowGain, y=dropletCount
+            float uPoints[kMaxPoints][4];   // xy=world pos（末尾一个是 centroid）
+            float uDroplets[kMaxDroplets][4]; // xy=world pos, z=falloff(ndc-y), w=intensity
         };
 
         bool     mEnabled = true;
@@ -108,6 +115,10 @@ namespace spike01
         float                  mBlobRadius = 0.5f;
         bool                   mHasBlob    = false;
         float                  mTime       = 0.0f; // M3 视觉动画时钟
+
+        // juice droplet 缓存（世界坐标 + 世界半径；SetDroplets 写、Execute 读）。
+        std::vector<glm::vec2> mDropletPos;
+        std::vector<float>     mDropletRadius;
 
         Orange::Rhi::RHIDevice* mpDevice = nullptr; // Setup 缓存的借用指针
 

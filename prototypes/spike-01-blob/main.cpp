@@ -518,6 +518,28 @@ namespace
     }
 
     // ===========================================================================
+    // juice —— 落地溅射(6) / 分裂(11) / 合并(12)。走 SDF pass 的 droplet 通道：额外
+    // metaball 点累加进同一 density field，与主体天然 smin 融合/断开。溅射 = 物理粒子；
+    // 分裂/合并 = 纯 droplet 位置脚本动画（设计决策 A 轻量，不重构第二 blob 环）。
+    // ===========================================================================
+    struct SlimeDroplet
+    {
+        glm::vec2 pos{0.0f, 0.0f};
+        glm::vec2 vel{0.0f, 0.0f};
+        float     radius     = 0.1f; // 当前世界半径（随生命缩小）
+        float     baseRadius = 0.1f;
+        float     life       = 0.0f; // 剩余 s
+        float     maxLife     = 0.4f;
+    };
+
+    enum class JuiceMode
+    {
+        None,
+        Split,
+        Merge,
+    };
+
+    // ===========================================================================
     // SpikeLayer —— Loop A 全部逻辑（输入 + 固定步长物理 + 手感 + overlay + 调参面板）。
     // ===========================================================================
     class SpikeLayer : public Layer
@@ -644,6 +666,9 @@ namespace
                                    mBlobParams.blobRadius);
                 mpSdfPass->SetTime(mRenderTime); // M3：眼呼吸 / 光斑明灭（视觉时钟，与物理步解耦）
             }
+
+            // juice：推进溅射粒子 + 分裂/合并脚本，喂 SDF pass 的 droplet 通道（在 Render 前）。
+            UpdateDroplets(dt);
 
             DrawDebug();
             mPipeline.Render(mWorld);
@@ -813,6 +838,23 @@ namespace
                             static_cast<double>(mCurStiff));
                 ImGui::SliderFloat("形变平滑 tau (s)", &mDeformTau, 0.01f, 0.3f);
                 ImGui::TextDisabled("静止=矮dome(1.15/0.80); 跳跃拉伸/落地扁靠键盘 dogfood 触发。");
+            }
+            if (ImGui::CollapsingHeader("juice (溅射/分裂/合并)", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                ImGui::TextDisabled("落地自动溅射水滴; 分裂/合并按钮触发 (droplet 通道, smin 融合)。");
+                if (ImGui::Button("触发分裂"))
+                {
+                    TriggerSplit();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("触发合并"))
+                {
+                    TriggerMerge();
+                }
+                const char* jm = (mJuiceMode == JuiceMode::Split)
+                                     ? "Split"
+                                     : (mJuiceMode == JuiceMode::Merge ? "Merge" : "None");
+                ImGui::Text("活 droplet: %zu | juice: %s", mDroplets.size(), jm);
             }
             if (ImGui::CollapsingHeader("史莱姆 gel 外观 (Tier 1 CPU 着色)", ImGuiTreeNodeFlags_DefaultOpen))
             {
@@ -1407,10 +1449,11 @@ namespace
                 mLaunchTimer = std::max(0.0f, mLaunchTimer - dt);
             }
 
-            // 着地沿 + 落地冲击够大（上帧下落 vy 大）→ 触发 Landing 一次性计时。
+            // 着地沿 + 落地冲击够大（上帧下落 vy 大）→ 触发 Landing 一次性计时 + 溅射水滴。
             if (grounded && !mDeformPrevGrounded && mDeformPrevVy < -kLandingImpactThresh)
             {
                 mLandingTimer = kLandingDuration;
+                SpawnSplatter();
             }
             // 起跳沿（离地且上升）→ 触发 Launch 极短窗口。
             if (!grounded && mDeformPrevGrounded && vy > 0.0f)
@@ -1443,12 +1486,13 @@ namespace
         // 回弹（Landing→Idle 隆起）不特设，靠 blob 弹簧欠阻尼超调自然涌现（§3 #7）。
         void UpdateDeform(float dt)
         {
+            // 总是派生状态（供 juice 溅射的落地检测 + ImGui 显示），即使形变关闭。
+            mMotionState = DeriveMotionState(dt);
             if (!mDeformEnabled)
             {
                 mBlob.SetTargetShape(glm::mat2(1.0f)); // 圆（退回手动 stiffness slider）
                 return;
             }
-            mMotionState          = DeriveMotionState(dt);
             const MotionShape tgt = MotionShapeTarget(mMotionState);
 
             // 指数平滑，tau≈0.06s：状态切换不突变。dt=0 时 a=0（不动），安全。
@@ -1459,6 +1503,121 @@ namespace
 
             mBlob.SetTargetShape(glm::mat2(mCurSx, 0.0f, 0.0f, mCurSy)); // 列主序 diag(sx,sy)
             mBlobParams.stiffness = mCurStiff;
+        }
+
+        // —— juice：落地溅射 / 分裂 / 合并 ——
+        // 落地冲击瞬间从 blob 底部溅出 ~5 个水滴（物理粒子：朝外上放射 + 自管重力，随生命缩小）。
+        void SpawnSplatter()
+        {
+            const glm::vec2 base = mCpState.position +
+                                   glm::vec2(0.0f, -mBlobParams.blobRadius * 0.5f);
+            constexpr int n = 5;
+            for (int i = 0; i < n; ++i)
+            {
+                // 上半放射（0.15π..0.85π 从右上到左上），速度按 index 变化（确定性，无 rand）。
+                const float ang   = 3.14159265f *
+                                    (0.15f + 0.7f * static_cast<float>(i) / static_cast<float>(n - 1));
+                const float speed = 2.6f + 0.5f * static_cast<float>(i % 3);
+                SlimeDroplet d;
+                d.pos        = base;
+                d.vel        = glm::vec2(std::cos(ang), std::sin(ang) + 0.4f) * speed;
+                d.baseRadius = mBlobParams.blobRadius * 0.20f;
+                d.radius     = d.baseRadius;
+                d.maxLife    = 0.4f;
+                d.life       = d.maxLife;
+                mDroplets.push_back(d);
+            }
+        }
+
+        void TriggerSplit()
+        {
+            mJuiceMode  = JuiceMode::Split;
+            mJuiceTimer = 0.0f;
+        }
+        void TriggerMerge()
+        {
+            mJuiceMode  = JuiceMode::Merge;
+            mJuiceTimer = 0.0f;
+        }
+
+        // 每帧推进溅射粒子 + 分裂/合并脚本，收集所有 droplet 世界坐标/半径喂 SDF pass。
+        void UpdateDroplets(float dt)
+        {
+            constexpr float kDropGravity = 14.0f;
+            for (auto& d : mDroplets)
+            {
+                d.life -= dt;
+                d.vel.y -= kDropGravity * dt;
+                d.pos += d.vel * dt;
+                d.radius = d.baseRadius * std::max(0.0f, d.life / d.maxLife); // 随生命缩小
+            }
+            mDroplets.erase(std::remove_if(mDroplets.begin(), mDroplets.end(),
+                                           [](const SlimeDroplet& d)
+                                           { return d.life <= 0.0f; }),
+                            mDroplets.end());
+
+            std::vector<glm::vec2> pos;
+            std::vector<float>     rad;
+            for (const auto& d : mDroplets)
+            {
+                pos.push_back(d.pos);
+                rad.push_back(d.radius);
+            }
+            UpdateJuiceScript(dt, pos, rad); // 追加分裂/合并脚本 droplet
+
+            const int cap = spike01::SlimeMetaballPass::kMaxDroplets;
+            if (static_cast<int>(pos.size()) > cap)
+            {
+                pos.resize(cap);
+                rad.resize(cap);
+            }
+            if (mpSdfPass)
+            {
+                mpSdfPass->SetDroplets(pos.empty() ? nullptr : pos.data(),
+                                       rad.empty() ? nullptr : rad.data(),
+                                       static_cast<int>(pos.size()));
+            }
+        }
+
+        // 分裂/合并纯 droplet 位置动画（附加到 pos/rad）：一个大 droplet 沿横向进出主体，
+        // 中间 1-2 个细颈 droplet 随过渡收细，靠 metaball smin 天然拉断/融合。
+        void UpdateJuiceScript(float dt, std::vector<glm::vec2>& pos, std::vector<float>& rad)
+        {
+            if (mJuiceMode == JuiceMode::None)
+            {
+                return;
+            }
+            constexpr float kDur = 1.3f;
+            mJuiceTimer += dt;
+            const float t = std::clamp(mJuiceTimer / kDur, 0.0f, 1.0f);
+
+            const glm::vec2 c   = mBlobCentroid; // 主体质心（世界）
+            const float     R   = mBlobParams.blobRadius;
+            const float     dir = 1.0f;          // 向右进出
+
+            // 大 droplet：分裂 t:0→1 飞出；合并 t:0→1 靠回（起点远）。
+            const float     bigT   = (mJuiceMode == JuiceMode::Split) ? t : (1.0f - t);
+            const glm::vec2 bigPos = c + glm::vec2(dir * R * 2.2f * bigT, R * 0.2f);
+            pos.push_back(bigPos);
+            rad.push_back(R * 0.6f);
+
+            // 细颈：分裂时随 t 变细并断，合并时随 t 变粗融——neckStrength 反映连接强度。
+            const float neck = (mJuiceMode == JuiceMode::Split) ? (1.0f - t) : t;
+            if (neck > 0.05f)
+            {
+                for (int k = 1; k <= 2; ++k)
+                {
+                    const float f = static_cast<float>(k) / 3.0f; // 0.33 / 0.67 沿连线
+                    pos.push_back(c + (bigPos - c) * f);
+                    rad.push_back(R * 0.22f * neck);
+                }
+            }
+
+            if (mJuiceTimer >= kDur)
+            {
+                mJuiceMode  = JuiceMode::None;
+                mJuiceTimer = 0.0f;
+            }
         }
 
         // —— overlay：场景碰撞盒 + control point 标记 + 速度向量 + 输入标记 + 落点 ——
@@ -1663,6 +1822,11 @@ namespace
         DemoPhase mDemoPhase     = DemoPhase::Stand;
         float     mDemoTimer     = 0.0f;
         bool      mDemoJumpFired = false;
+
+        // —— juice：溅射粒子 + 分裂/合并脚本 ——
+        std::vector<SlimeDroplet> mDroplets;
+        JuiceMode                 mJuiceMode  = JuiceMode::None;
+        float                     mJuiceTimer = 0.0f;
 
         // overlay / 判据
         float                  mInputFlashTimer = 0.0f;

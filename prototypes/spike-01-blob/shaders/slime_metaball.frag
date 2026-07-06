@@ -18,9 +18,10 @@ layout(std140, set = 0, binding = 0) uniform SlimeUBO
     mat4 uViewProj;   // world -> clip（主相机）
     vec4 uParams0;    // x=count, y=isoLevel, z=aspect, w=falloffRadius(ndc-y)
     vec4 uParams1;    // x=blobNdcRadius, y=domeScale, z=rimGain, w=specGain
-    vec4 uParams2;    // x=ambient, y=time, z=eyeGain, w=speckGain
-    vec4 uParams3;    // x=glowGain
-    vec4 uPoints[16]; // xy=world pos（末尾一个是 centroid）
+    vec4 uParams2;      // x=ambient, y=time, z=eyeGain, w=speckGain
+    vec4 uParams3;      // x=glowGain, y=dropletCount
+    vec4 uPoints[16];   // xy=world pos（末尾一个是 centroid）
+    vec4 uDroplets[8];  // juice 额外 metaball 点：xy=world pos, z=falloff(ndc-y), w=intensity
 } U;
 
 // gel 材质常量 —— 迁移自 main.cpp Tier1 SlimeParams（准确值）。
@@ -84,6 +85,24 @@ void main()
             field += a * a;
         }
     }
+
+    // --- juice droplet 通道（落地溅射 / 分裂 / 合并）：额外 metaball 点累加进同一 field，
+    //     与主体 metaball 天然 smin 融合 / 断开 → 剪影自动连 / 断。各自半径（世界半径 CPU 已转 ndc-y）。
+    int dropCount = int(U.uParams3.y);
+    for (int i = 0; i < dropCount; ++i)
+    {
+        vec4  dp  = U.uDroplets[i];
+        float rad = max(dp.z, 1e-4);
+        vec2  d   = pix - ProjectNdc(dp.xy);
+        d.x *= aspect;
+        float r = length(d) / rad;
+        if (r < 1.0)
+        {
+            float a = 1.0 - r;
+            field += dp.w * a * a; // w = intensity
+        }
+    }
+
     float mask = smoothstep(iso - 0.05, iso, field);
     if (mask <= 0.001)
     {

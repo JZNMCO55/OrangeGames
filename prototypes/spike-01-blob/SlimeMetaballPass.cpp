@@ -83,6 +83,13 @@ namespace spike01
         mHasBlob       = true;
     }
 
+    void SlimeMetaballPass::SetDroplets(const glm::vec2* pos, const float* radius, int count)
+    {
+        const int n = (pos != nullptr && radius != nullptr) ? std::min(count, kMaxDroplets) : 0;
+        mDropletPos.assign(pos, pos + std::max(0, n));
+        mDropletRadius.assign(radius, radius + std::max(0, n));
+    }
+
     void SlimeMetaballPass::Setup(RenderGraphBuilder& builder)
     {
         mpDevice = builder.pDevice;
@@ -271,6 +278,18 @@ namespace spike01
             // 末尾一格 = centroid，填实内部（避免 metaball 环状中空）。
             pUbo->uPoints[n][0] = mCentroidWorld.x;
             pUbo->uPoints[n][1] = mCentroidWorld.y;
+
+            // juice droplet：世界半径转 ndc-y（同主体 world→ndc 尺度 × falloffScale，融合行为一致）。
+            const float worldToNdc = blobNdcRadius / std::max(mBlobRadius, 1e-4f);
+            const int   dropN      = std::min(static_cast<int>(mDropletPos.size()), kMaxDroplets);
+            pUbo->uParams3[1]      = static_cast<float>(dropN);
+            for (int i = 0; i < dropN; ++i)
+            {
+                pUbo->uDroplets[i][0] = mDropletPos[i].x;
+                pUbo->uDroplets[i][1] = mDropletPos[i].y;
+                pUbo->uDroplets[i][2] = std::max(1e-4f, mTunables.falloffScale * mDropletRadius[i] * worldToNdc);
+                pUbo->uDroplets[i][3] = 1.0f; // intensity
+            }
 
             mUbo->Unmap();
         }
