@@ -256,7 +256,12 @@ namespace spike01
             pUbo->uParams1[1] = mTunables.domeScale;
             pUbo->uParams1[2] = mTunables.rimGain;
             pUbo->uParams1[3] = mTunables.specGain;
+            // M3：ambient + 视觉时钟 + 眼/光斑/辉光 emissive 强度。
             pUbo->uParams2[0] = mTunables.ambient;
+            pUbo->uParams2[1] = mTime;
+            pUbo->uParams2[2] = mTunables.eyeGain;
+            pUbo->uParams2[3] = mTunables.speckGain;
+            pUbo->uParams3[0] = mTunables.glowGain;
 
             for (int i = 0; i < n; ++i)
             {

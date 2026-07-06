@@ -51,17 +51,19 @@ namespace spike01
         SlimeMetaballPass();
         ~SlimeMetaballPass() override; // 在 .cpp defaulted，让 RHI unique_ptr 成员析构在完整类型下实例化
 
-        // 调参（ImGui live）。M1：falloffScale = 融合半径相对 blob 投影半径的倍数
-        //（太小散珠子、太大糊团）；isoLevel = 剪影阈值。M2 材质（值迁移自 Tier1 SlimeParams）：
-        // domeScale = 半球半径 / blob 投影半径（对齐剪影胖度）；rimGain/specGain/ambient。
+        // 调参（ImGui live）。M1 剪影：falloffScale/isoLevel。M2 材质：domeScale/rimGain/
+        // specGain/ambient。M3 角色元素强度：eyeGain/speckGain/glowGain（emissive 喂 bloom）。
         struct Tunables
         {
             float falloffScale = 1.0f;  // M1：falloff = falloffScale × blob 投影半径（ndc-y）
             float isoLevel     = 0.6f;  // M1：smoothstep 剪影阈值
-            float domeScale    = 1.6f;  // M2：半球半径倍数（≈ 默认剪影胖度，对齐 dome 与剪影）
-            float rimGain      = 0.85f; // M2：Fresnel 亮边强度（Tier1 值）
+            float domeScale    = 1.15f; // M3：半球半径倍数降到 ≈剪影（边缘 N.z→0 让 Fresnel 出来）
+            float rimGain      = 1.35f; // M3：Fresnel 亮边提强（够亮喂 bloom 发光）
             float specGain     = 1.15f; // M2：湿润高光强度（Tier1 值）
             float ambient      = 0.30f; // M2：环境光基线（Tier1 值）
+            float eyeGain      = 2.0f;  // M3：发光眼 emissive 强度
+            float speckGain    = 1.3f;  // M3：体内光斑 emissive 强度
+            float glowGain     = 1.2f;  // M3：底部接触辉光 emissive 强度
         };
 
         const char* Name() const noexcept override { return "SlimeMetaballPass"; }
@@ -80,15 +82,20 @@ namespace spike01
         void SetBlob(const glm::vec2* perimeterWorld, int count,
                      glm::vec2 centroidWorld, float radius);
 
+        // M3：视觉动画时钟（秒，单调递增）——眼呼吸 / 光斑明灭。SpikeLayer 每帧传
+        // mRenderTime（与物理步解耦的视觉时钟）。Execute 写进 UBO。
+        void SetTime(float seconds) noexcept { mTime = seconds; }
+
     private:
         // std140 UBO，与 slime_metaball.frag 逐字对齐：
-        // mat4(64) + vec4×3(48) + vec4[16](256) = 368B。
+        // mat4(64) + vec4×4(64) + vec4[16](256) = 384B。
         struct SlimeUbo
         {
             float uViewProj[16];          // world -> clip（= ctx.pViewProjData）
             float uParams0[4];            // x=count, y=isoLevel, z=aspect, w=falloffRadius(ndc-y)
             float uParams1[4];            // x=blobNdcRadius, y=domeScale, z=rimGain, w=specGain
-            float uParams2[4];            // x=ambient（其余备用）
+            float uParams2[4];            // x=ambient, y=time, z=eyeGain, w=speckGain
+            float uParams3[4];            // x=glowGain（其余备用）
             float uPoints[kMaxPoints][4]; // xy=world pos（末尾一个是 centroid）
         };
 
@@ -100,6 +107,7 @@ namespace spike01
         glm::vec2              mCentroidWorld{0.0f, 0.0f};
         float                  mBlobRadius = 0.5f;
         bool                   mHasBlob    = false;
+        float                  mTime       = 0.0f; // M3 视觉动画时钟
 
         Orange::Rhi::RHIDevice* mpDevice = nullptr; // Setup 缓存的借用指针
 
