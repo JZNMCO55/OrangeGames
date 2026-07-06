@@ -431,6 +431,64 @@ namespace
     }
 
     // ===========================================================================
+    // D1 形变驱动 —— 让史莱姆随 gameplay 状态形变（12 状态核心的子集）。
+    // 设计规格：DESIGN-deform-12-states.md §2（状态判据）+ §3（逐态 sx/sy/stiffness 表）。
+    // Crouch/Squeezed/Rolling 先 defer：本控制方案无蓄力键（跳跃即时触发无 charge 窗口）；
+    // 挤压/滚动靠碰撞/欠阻尼弹簧涌现，不设查表 shape（见 §2）。
+    // ===========================================================================
+    enum class SlimeMotionState
+    {
+        Idle,
+        Launch,
+        Rising,
+        Falling,
+        Landing,
+        Sliding,
+    };
+
+    const char* MotionStateName(SlimeMotionState s)
+    {
+        switch (s)
+        {
+            case SlimeMotionState::Idle:    return "Idle";
+            case SlimeMotionState::Launch:  return "Launch";
+            case SlimeMotionState::Rising:  return "Rising";
+            case SlimeMotionState::Falling: return "Falling";
+            case SlimeMotionState::Landing: return "Landing";
+            case SlimeMotionState::Sliding: return "Sliding";
+        }
+        return "?";
+    }
+
+    // 逐状态形变目标（sx 横向 / sy 纵向缩放相对基础圆；stiffness 当帧弹簧硬度）。抄 §3 表。
+    struct MotionShape
+    {
+        float sx;
+        float sy;
+        float stiffness;
+    };
+
+    MotionShape MotionShapeTarget(SlimeMotionState s)
+    {
+        switch (s)
+        {
+            case SlimeMotionState::Idle:    return {1.15f, 0.80f, 200.0f}; // 矮 dome（宽>高）
+            case SlimeMotionState::Launch:  return {0.70f, 1.55f, 120.0f}; // 高瘦柱（软，拉丝滞后）
+            case SlimeMotionState::Rising:  return {0.95f, 1.10f, 200.0f}; // 饱满球略纵长
+            case SlimeMotionState::Falling: return {0.88f, 1.20f, 180.0f}; // 纵长下垂
+            case SlimeMotionState::Landing: return {1.60f, 0.42f, 350.0f}; // 极扁冲击（硬瞬间）
+            case SlimeMotionState::Sliding: return {1.50f, 0.72f, 200.0f}; // 横躺拉长
+        }
+        return {1.15f, 0.80f, 200.0f};
+    }
+
+    // 状态检测阈值（§2）。
+    constexpr float kLandingImpactThresh = 5.0f;  // |vy_prev| 超此算硬着地 → 触发 Landing
+    constexpr float kLandingDuration     = 0.12f; // Landing 一次性计时 s
+    constexpr float kLaunchDuration      = 0.10f; // Launch 离地极短窗口 s
+    constexpr float kSlideVxThresh       = 6.0f;  // grounded 且 |vx| 超此 → Sliding
+
+    // ===========================================================================
     // SpikeLayer —— Loop A 全部逻辑（输入 + 固定步长物理 + 手感 + overlay + 调参面板）。
     // ===========================================================================
     class SpikeLayer : public Layer
@@ -487,6 +545,11 @@ namespace
             float dt = frame.time.deltaSeconds;
             dt       = std::clamp(dt, 0.0f, kMaxFrameDt);
             mRenderTime += dt; // gel 光斑漂移 / 眼呼吸 / 高光脉动（视觉动画，与物理步无关）
+
+            // D1 形变：派生状态 → 查表目标 → 指数平滑 → 喂 blob（本帧所有固定子步共用同一形状 +
+            // stiffness）。用上帧 control point 快照（一帧延迟对视觉形变无感知）。
+            UpdateDeform(dt);
+
             mAccumulator += dt;
             mStepsThisFrame = 0;
             while (mAccumulator >= kFixedDt)
@@ -685,6 +748,16 @@ namespace
                 ImGui::Checkbox("画 control point 标记", &mBlobParams.drawCpMarker);
                 ImGui::Text("质点数: %d perimeter + 1 center (固定, 改在 Blob 构造)",
                             mBlob.PerimeterCount());
+            }
+            if (ImGui::CollapsingHeader("形变驱动 (D1 状态形变)", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                ImGui::Checkbox("state-driven deform (关=圆+手动stiffness)", &mDeformEnabled);
+                ImGui::Text("当前状态: %s", MotionStateName(mMotionState));
+                ImGui::Text("平滑形变: sx %.2f  sy %.2f  stiffness %.0f",
+                            static_cast<double>(mCurSx), static_cast<double>(mCurSy),
+                            static_cast<double>(mCurStiff));
+                ImGui::SliderFloat("形变平滑 tau (s)", &mDeformTau, 0.01f, 0.3f);
+                ImGui::TextDisabled("静止=矮dome(1.15/0.80); 跳跃拉伸/落地扁靠键盘 dogfood 触发。");
             }
             if (ImGui::CollapsingHeader("史莱姆 gel 外观 (Tier 1 CPU 着色)", ImGuiTreeNodeFlags_DefaultOpen))
             {
@@ -1175,6 +1248,78 @@ namespace
             mPrevVy         = 0.0f;
         }
 
+        // —— D1：从 control point 每帧派生形变状态 ——
+        // 优先级 Landing > Launch > Rising/Falling > Sliding > Idle（§2）。读上帧 mCpState/
+        // mGrounded 快照 + 自跟踪 prev-frame 边沿；Landing 用落地前一帧的 vy 当冲击量。
+        SlimeMotionState DeriveMotionState(float dt)
+        {
+            const bool  grounded = mGrounded;
+            const float vy       = mCpState.velocity.y;
+            const float vx       = mCpState.velocity.x;
+
+            if (mLandingTimer > 0.0f)
+            {
+                mLandingTimer = std::max(0.0f, mLandingTimer - dt);
+            }
+            if (mLaunchTimer > 0.0f)
+            {
+                mLaunchTimer = std::max(0.0f, mLaunchTimer - dt);
+            }
+
+            // 着地沿 + 落地冲击够大（上帧下落 vy 大）→ 触发 Landing 一次性计时。
+            if (grounded && !mDeformPrevGrounded && mDeformPrevVy < -kLandingImpactThresh)
+            {
+                mLandingTimer = kLandingDuration;
+            }
+            // 起跳沿（离地且上升）→ 触发 Launch 极短窗口。
+            if (!grounded && mDeformPrevGrounded && vy > 0.0f)
+            {
+                mLaunchTimer = kLaunchDuration;
+            }
+            mDeformPrevGrounded = grounded;
+            mDeformPrevVy       = vy;
+
+            if (mLandingTimer > 0.0f)
+            {
+                return SlimeMotionState::Landing;
+            }
+            if (mLaunchTimer > 0.0f)
+            {
+                return SlimeMotionState::Launch;
+            }
+            if (!grounded)
+            {
+                return (vy > 0.0f) ? SlimeMotionState::Rising : SlimeMotionState::Falling;
+            }
+            if (std::abs(vx) > kSlideVxThresh)
+            {
+                return SlimeMotionState::Sliding;
+            }
+            return SlimeMotionState::Idle;
+        }
+
+        // 每帧：派生状态 → 查表 → 指数平滑（帧率无关）当前 sx/sy/stiffness → 喂 blob。
+        // 回弹（Landing→Idle 隆起）不特设，靠 blob 弹簧欠阻尼超调自然涌现（§3 #7）。
+        void UpdateDeform(float dt)
+        {
+            if (!mDeformEnabled)
+            {
+                mBlob.SetTargetShape(glm::mat2(1.0f)); // 圆（退回手动 stiffness slider）
+                return;
+            }
+            mMotionState          = DeriveMotionState(dt);
+            const MotionShape tgt = MotionShapeTarget(mMotionState);
+
+            // 指数平滑，tau≈0.06s：状态切换不突变。dt=0 时 a=0（不动），安全。
+            const float a = 1.0f - std::exp(-dt / std::max(1e-4f, mDeformTau));
+            mCurSx += (tgt.sx - mCurSx) * a;
+            mCurSy += (tgt.sy - mCurSy) * a;
+            mCurStiff += (tgt.stiffness - mCurStiff) * a;
+
+            mBlob.SetTargetShape(glm::mat2(mCurSx, 0.0f, 0.0f, mCurSy)); // 列主序 diag(sx,sy)
+            mBlobParams.stiffness = mCurStiff;
+        }
+
         // —— overlay：场景碰撞盒 + control point 标记 + 速度向量 + 输入标记 + 落点 ——
         void DrawDebug()
         {
@@ -1359,6 +1504,18 @@ namespace
         float               mApexDivergence = 0.0f; // 最近跳跃顶点的分叉
         float               mPeakDivergence = 0.0f; // 运行期峰值（可重置）
         float               mPrevVy         = 0.0f; // 上帧 cp 垂直速度（apex 检测）
+
+        // —— D1 形变驱动状态 ——
+        bool             mDeformEnabled      = true; // 关掉退回圆 + 手动 stiffness slider
+        SlimeMotionState mMotionState        = SlimeMotionState::Idle;
+        float            mLandingTimer       = 0.0f;
+        float            mLaunchTimer        = 0.0f;
+        bool             mDeformPrevGrounded = false;
+        float            mDeformPrevVy       = 0.0f;
+        float            mCurSx              = 1.15f;  // 当前平滑形变（init = Idle 矮 dome）
+        float            mCurSy              = 0.80f;
+        float            mCurStiff           = 200.0f;
+        float            mDeformTau          = 0.06f;  // 形变平滑时间常数（slider）
 
         // overlay / 判据
         float                  mInputFlashTimer = 0.0f;
