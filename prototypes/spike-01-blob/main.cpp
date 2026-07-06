@@ -439,23 +439,29 @@ namespace
     enum class SlimeMotionState
     {
         Idle,
-        Launch,
+        Crouch,   // 下压/蓄力：宽扁矮（比 Idle 更压）
+        Launch,   // 拉伸：起跳前纵向拉长
         Rising,
         Falling,
         Landing,
         Sliding,
+        Rolling,  // 滚动：椭圆 + 随时间翻滚（旋转 target shape）
+        Squeezed, // 受挤压：窄缝里被压扁
     };
 
     const char* MotionStateName(SlimeMotionState s)
     {
         switch (s)
         {
-            case SlimeMotionState::Idle:    return "Idle";
-            case SlimeMotionState::Launch:  return "Launch";
-            case SlimeMotionState::Rising:  return "Rising";
-            case SlimeMotionState::Falling: return "Falling";
-            case SlimeMotionState::Landing: return "Landing";
-            case SlimeMotionState::Sliding: return "Sliding";
+            case SlimeMotionState::Idle:     return "Idle";
+            case SlimeMotionState::Crouch:   return "Crouch";
+            case SlimeMotionState::Launch:   return "Launch";
+            case SlimeMotionState::Rising:   return "Rising";
+            case SlimeMotionState::Falling:  return "Falling";
+            case SlimeMotionState::Landing:  return "Landing";
+            case SlimeMotionState::Sliding:  return "Sliding";
+            case SlimeMotionState::Rolling:  return "Rolling";
+            case SlimeMotionState::Squeezed: return "Squeezed";
         }
         return "?";
     }
@@ -472,12 +478,15 @@ namespace
     {
         switch (s)
         {
-            case SlimeMotionState::Idle:    return {1.15f, 0.80f, 200.0f}; // 矮 dome（宽>高）
-            case SlimeMotionState::Launch:  return {0.70f, 1.55f, 120.0f}; // 高瘦柱（软，拉丝滞后）
-            case SlimeMotionState::Rising:  return {0.95f, 1.10f, 200.0f}; // 饱满球略纵长
-            case SlimeMotionState::Falling: return {0.88f, 1.20f, 180.0f}; // 纵长下垂
-            case SlimeMotionState::Landing: return {1.60f, 0.42f, 350.0f}; // 极扁冲击（硬瞬间）
-            case SlimeMotionState::Sliding: return {1.50f, 0.72f, 200.0f}; // 横躺拉长
+            case SlimeMotionState::Idle:     return {1.15f, 0.80f, 200.0f}; // 矮 dome（宽>高）
+            case SlimeMotionState::Crouch:   return {1.42f, 0.60f, 420.0f}; // 蓄力宽扁（比 Idle 更压、更硬）
+            case SlimeMotionState::Launch:   return {0.70f, 1.55f, 120.0f}; // 高瘦柱（软，拉丝滞后）
+            case SlimeMotionState::Rising:   return {0.95f, 1.10f, 200.0f}; // 饱满球略纵长
+            case SlimeMotionState::Falling:  return {0.82f, 1.28f, 180.0f}; // 纵长水滴倾向（下垂）
+            case SlimeMotionState::Landing:  return {1.60f, 0.42f, 350.0f}; // 极扁冲击（硬瞬间）
+            case SlimeMotionState::Sliding:  return {1.50f, 0.72f, 200.0f}; // 横躺拉长
+            case SlimeMotionState::Rolling:  return {1.24f, 0.82f, 230.0f}; // 椭圆（旋转在 UpdateDeform 叠加）
+            case SlimeMotionState::Squeezed: return {1.34f, 0.66f, 320.0f}; // 窄缝压扁（硬，贴形）
         }
         return {1.15f, 0.80f, 200.0f};
     }
@@ -493,26 +502,33 @@ namespace
     // 状态供截图。脚本经"虚拟输入"注入（设 mMoveAxis / mJumpHeld / jump buffer，复用真实
     // 手感 + Box2D 物理），故演示的形变 = 真实手感的形变。
     // ===========================================================================
+    // 12 态 showcase：脚本轮一遍参考图全部 12 态供逐帧截图对齐。emergent 态（Idle/跳跃序列/
+    // 滑行）注入虚拟输入走真实手感；pose-only 态（Crouch/Roll/Squeeze）用 forced-state 摆姿；
+    // juice（Split/Merge）调触发脚本。
     enum class DemoPhase
     {
-        Stand,    // 站立看 Idle 矮 dome
-        Jump,     // 起跳看 Launch→Rising→Falling→Landing→回弹（原地，留在视野）
-        RunRight, // 向右跑看 Sliding
-        StopR,    // 减速回 Idle
-        RunLeft,  // 向左跑看 Sliding 反向
-        StopL,    // 减速回 Idle → 循环
+        Idle,     // 1 静止 矮 dome
+        Crouch,   // 2 下压（forced 宽扁）
+        JumpSeq,  // 3拉伸→4跳起→5下落→6落地冲击+溅射→7回弹（一次跳跃序列，原地 emergent）
+        Roll,     // 8 滚动（forced 翻滚椭圆）
+        Squeeze,  // 9 受挤压（forced 窄压）
+        Slide,    // 10 滑行（向右跑 emergent）
+        Split,    // 11 分裂（juice）
+        Merge,    // 12 合并（juice）
     };
 
     const char* DemoPhaseName(DemoPhase p)
     {
         switch (p)
         {
-            case DemoPhase::Stand:    return "Stand (Idle)";
-            case DemoPhase::Jump:     return "Jump (Launch/Rising/Falling/Landing)";
-            case DemoPhase::RunRight: return "RunRight (Sliding)";
-            case DemoPhase::StopR:    return "StopR (-> Idle)";
-            case DemoPhase::RunLeft:  return "RunLeft (Sliding)";
-            case DemoPhase::StopL:    return "StopL (-> Idle)";
+            case DemoPhase::Idle:    return "1.Idle 静止";
+            case DemoPhase::Crouch:  return "2.Crouch 下压";
+            case DemoPhase::JumpSeq: return "3-7.Launch/Rising/Falling/Landing/回弹";
+            case DemoPhase::Roll:    return "8.Rolling 滚动";
+            case DemoPhase::Squeeze: return "9.Squeezed 受挤压";
+            case DemoPhase::Slide:   return "10.Sliding 滑行";
+            case DemoPhase::Split:   return "11.Split 分裂";
+            case DemoPhase::Merge:   return "12.Merge 合并";
         }
         return "?";
     }
@@ -561,6 +577,15 @@ namespace
         const ControlPointState& GetControlPoint() const noexcept
         {
             return mCpState;
+        }
+
+        // 启动即进 12 态 attract 演示（`--demo` CLI flag 用；免手勾 ImGui 供截图 / 展示）。
+        // reel 模式顺带隐藏 ImGui 调参面板 → 纯史莱姆黑底，对齐参考图。
+        void EnableAutoDemo()
+        {
+            mAutoDemo  = true;
+            mReelMode  = true;
+            StartDemo();
         }
 
         // 平台事件：分辨率变化转给 pipeline；key 事件喂给 InputContext。
@@ -679,6 +704,10 @@ namespace
 
         void OnImGui() override
         {
+            if (mReelMode)
+            {
+                return; // --demo reel：隐藏调参面板，纯史莱姆黑底对齐参考图
+            }
             // 面板右置（首次），把左侧 / 中央 viewport 让给 control point + blob
             // （出生点在左侧，避免被面板遮挡）；ImGuiCond_FirstUseEver 保留用户拖动。
             ImGui::SetNextWindowPos(ImVec2(944.0f, 8.0f), ImGuiCond_FirstUseEver);
@@ -691,6 +720,10 @@ namespace
                 if (mAutoDemo)
                 {
                     StartDemo();
+                }
+                else
+                {
+                    mHasForcedState = false; // 关演示即清强制姿态，手玩恢复 emergent 派生态
                 }
             }
             if (mAutoDemo)
@@ -1008,9 +1041,10 @@ namespace
         // 开启演示：重置到第一阶段 + control point 回出生点（回到相机聚焦区，干净起步）。
         void StartDemo()
         {
-            mDemoPhase     = DemoPhase::Stand;
-            mDemoTimer     = 0.0f;
-            mDemoJumpFired = false;
+            mDemoPhase      = DemoPhase::Idle;
+            mDemoTimer      = 0.0f;
+            mDemoJumpFired  = false;
+            mHasForcedState = false;
             ResetControlPoint();
         }
 
@@ -1018,7 +1052,7 @@ namespace
         {
             mDemoPhase     = next;
             mDemoTimer     = 0.0f;
-            mDemoJumpFired = false;
+            mDemoJumpFired = false; // 复用为每阶段 one-shot 触发闸（跳跃 / 分裂 / 合并）
         }
 
         // 自动演示脚本：设虚拟 action（mMoveAxis / mJumpHeld / jump buffer）复用真实手感，
@@ -1026,66 +1060,96 @@ namespace
         // 保证 control point 留在相机视野（focus≈-5，无 follow-cam）。
         void UpdateDemoScript(float dt)
         {
-            // 每帧先清零虚拟输入（不注入抓墙 / 攀爬）。
-            mMoveAxis      = 0.0f;
-            mJumpHeld      = false;
-            mGrabHeld      = false;
-            mClimbUpHeld   = false;
-            mClimbDownHeld = false;
+            // 每帧先清零虚拟输入 + 强制姿态（各 phase 按需重新置位）。
+            mMoveAxis       = 0.0f;
+            mJumpHeld       = false;
+            mGrabHeld       = false;
+            mClimbUpHeld    = false;
+            mClimbDownHeld  = false;
+            mHasForcedState = false;
 
             mDemoTimer += dt;
             const float cpx = mCpState.position.x; // 上帧快照，够做视野边界判断
 
             switch (mDemoPhase)
             {
-                case DemoPhase::Stand:
-                    if (mDemoTimer >= 1.5f)
+                case DemoPhase::Idle: // 1 静止
+                    if (mDemoTimer >= 2.0f)
                     {
-                        AdvanceDemoPhase(DemoPhase::Jump);
+                        AdvanceDemoPhase(DemoPhase::Crouch);
                     }
                     break;
 
-                case DemoPhase::Jump:
-                    mJumpHeld = true; // 全程按住 → 满跳（不触发松手切断）
+                case DemoPhase::Crouch: // 2 下压（forced 宽扁）
+                    mForcedState    = SlimeMotionState::Crouch;
+                    mHasForcedState = true;
+                    if (mDemoTimer >= 2.0f)
+                    {
+                        AdvanceDemoPhase(DemoPhase::JumpSeq);
+                    }
+                    break;
+
+                case DemoPhase::JumpSeq: // 3-7 起跳序列（emergent：Launch/Rising/Falling/Landing/回弹）
+                    mJumpHeld = true;    // 全程按住 → 满跳
                     if (!mDemoJumpFired)
                     {
-                        mJumpBufferTimer = mParams.jumpBufferTime; // 一次性触发起跳（同真实 jumpPressed）
+                        mJumpBufferTimer = mParams.jumpBufferTime; // 一次性触发起跳
                         mDemoJumpFired   = true;
                     }
-                    // 3.0s 够一次起跳 + 上升 + 下落 + 落地 + 回弹收敛。
-                    if (mDemoTimer >= 3.0f)
+                    if (mDemoTimer >= 3.2f) // 够起跳→上升→下落→落地溅射→回弹收敛
                     {
-                        AdvanceDemoPhase(DemoPhase::RunRight);
+                        AdvanceDemoPhase(DemoPhase::Roll);
                     }
                     break;
 
-                case DemoPhase::RunRight:
+                case DemoPhase::Roll: // 8 滚动（forced 翻滚椭圆）
+                    mForcedState    = SlimeMotionState::Rolling;
+                    mHasForcedState = true;
+                    if (mDemoTimer >= 2.6f)
+                    {
+                        AdvanceDemoPhase(DemoPhase::Squeeze);
+                    }
+                    break;
+
+                case DemoPhase::Squeeze: // 9 受挤压（forced 窄压）
+                    mForcedState    = SlimeMotionState::Squeezed;
+                    mHasForcedState = true;
+                    if (mDemoTimer >= 2.4f)
+                    {
+                        AdvanceDemoPhase(DemoPhase::Slide);
+                    }
+                    break;
+
+                case DemoPhase::Slide: // 10 滑行（向右跑 emergent Sliding）
                     mMoveAxis = 1.0f;
-                    if (cpx > kSpawn.x + 2.5f || mDemoTimer >= 1.5f)
+                    if (cpx > kSpawn.x + 2.0f || mDemoTimer >= 1.5f)
                     {
-                        AdvanceDemoPhase(DemoPhase::StopR);
+                        AdvanceDemoPhase(DemoPhase::Split);
                     }
                     break;
 
-                case DemoPhase::StopR:
-                    if (mDemoTimer >= 0.6f)
+                case DemoPhase::Split: // 11 分裂（juice）
+                    if (!mDemoJumpFired)
                     {
-                        AdvanceDemoPhase(DemoPhase::RunLeft);
+                        ResetControlPoint(); // Slide 后回中，juice 在视野中心演出
+                        TriggerSplit();
+                        mDemoJumpFired = true;
+                    }
+                    if (mDemoTimer >= 2.0f)
+                    {
+                        AdvanceDemoPhase(DemoPhase::Merge);
                     }
                     break;
 
-                case DemoPhase::RunLeft:
-                    mMoveAxis = -1.0f;
-                    if (cpx < kSpawn.x - 2.0f || mDemoTimer >= 1.5f)
+                case DemoPhase::Merge: // 12 合并（juice）→ 循环
+                    if (!mDemoJumpFired)
                     {
-                        AdvanceDemoPhase(DemoPhase::StopL);
+                        TriggerMerge();
+                        mDemoJumpFired = true;
                     }
-                    break;
-
-                case DemoPhase::StopL:
-                    if (mDemoTimer >= 0.6f)
+                    if (mDemoTimer >= 2.0f)
                     {
-                        AdvanceDemoPhase(DemoPhase::Stand);
+                        AdvanceDemoPhase(DemoPhase::Idle);
                     }
                     break;
             }
@@ -1486,8 +1550,10 @@ namespace
         // 回弹（Landing→Idle 隆起）不特设，靠 blob 弹簧欠阻尼超调自然涌现（§3 #7）。
         void UpdateDeform(float dt)
         {
-            // 总是派生状态（供 juice 溅射的落地检测 + ImGui 显示），即使形变关闭。
-            mMotionState = DeriveMotionState(dt);
+            // 总是派生状态（DeriveMotionState 内含落地溅射检测 + 计时 bookkeeping，不可跳），
+            // 但强制姿态置位时用 mForcedState 取代它做形变查表（showcase 摆姿）。
+            const SlimeMotionState derived = DeriveMotionState(dt);
+            mMotionState                   = mHasForcedState ? mForcedState : derived;
             if (!mDeformEnabled)
             {
                 mBlob.SetTargetShape(glm::mat2(1.0f)); // 圆（退回手动 stiffness slider）
@@ -1501,7 +1567,20 @@ namespace
             mCurSy += (tgt.sy - mCurSy) * a;
             mCurStiff += (tgt.stiffness - mCurStiff) * a;
 
-            mBlob.SetTargetShape(glm::mat2(mCurSx, 0.0f, 0.0f, mCurSy)); // 列主序 diag(sx,sy)
+            // Rolling：在各向异性 diag 上叠加翻滚旋转（椭圆转起来才像滚动）；其余态旋角归零。
+            glm::mat2 shape(mCurSx, 0.0f, 0.0f, mCurSy); // 列主序 diag(sx,sy)
+            if (mMotionState == SlimeMotionState::Rolling)
+            {
+                mRollAngle += dt * mRollSpeed;
+                const float c = std::cos(mRollAngle);
+                const float s = std::sin(mRollAngle);
+                shape = glm::mat2(c, s, -s, c) * shape; // R(angle) · diag
+            }
+            else
+            {
+                mRollAngle = 0.0f;
+            }
+            mBlob.SetTargetShape(shape);
             mBlobParams.stiffness = mCurStiff;
         }
 
@@ -1817,9 +1896,18 @@ namespace
         float            mCurStiff           = 200.0f;
         float            mDeformTau          = 0.06f;  // 形变平滑时间常数（slider）
 
+        // 强制姿态（showcase / demo 用）：置位则 UpdateDeform 用 mForcedState 取代物理派生态，
+        // 令 Crouch/Rolling/Squeezed 这类无 open-ground emergent 触发的态也能在演示里摆出。
+        // 正常玩法恒 false（emergent 输入接线 defer）。
+        bool             mHasForcedState = false;
+        SlimeMotionState mForcedState    = SlimeMotionState::Idle;
+        float            mRollAngle      = 0.0f;   // Rolling 翻滚角（rad，随时间推进）
+        float            mRollSpeed      = 3.2f;   // 翻滚角速度（rad/s）
+
         // —— 自动演示 ——
         bool      mAutoDemo      = false;
-        DemoPhase mDemoPhase     = DemoPhase::Stand;
+        bool      mReelMode      = false; // --demo：隐藏 ImGui 面板出纯史莱姆 reel
+        DemoPhase mDemoPhase     = DemoPhase::Idle;
         float     mDemoTimer     = 0.0f;
         bool      mDemoJumpFired = false;
 
@@ -1837,8 +1925,18 @@ namespace
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+    // `--demo`：启动即进 12 态 attract 演示（脚本驱动，免手勾 ImGui，供截图对齐参考图 / 展示）。
+    bool startDemo = false;
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::string(argv[i]) == "--demo")
+        {
+            startDemo = true;
+        }
+    }
+
     AppConfig cfg{};
     cfg.window.title  = "OrangeGames - spike-01-blob (Loop A control point + Loop B soft blob)";
     cfg.window.width  = 1280;
@@ -1986,7 +2084,12 @@ int main()
     spike01::SlimeMetaballPass* pSlimeSdfPass = slimeSdfPass.get();
     pipeline.InsertPass(Orange::Engine::Render::PipelineStage::AfterMainPass, std::move(slimeSdfPass));
 
-    host->PushLayer(std::make_unique<SpikeLayer>(pipeline, world, physWorld, cpBody, level, slimeBloom, pSlimeSdfPass));
+    auto spikeLayer = std::make_unique<SpikeLayer>(pipeline, world, physWorld, cpBody, level, slimeBloom, pSlimeSdfPass);
+    if (startDemo)
+    {
+        spikeLayer->EnableAutoDemo();
+    }
+    host->PushLayer(std::move(spikeLayer));
 
     const int rc = host->Run();
     pipeline.Shutdown();

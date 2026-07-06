@@ -59,6 +59,13 @@ namespace spike01
         float blobRadius = 0.5f;  // 静止时 perimeter 圈半径（改动 live 重建 rest 几何）
         float skin       = 0.03f; // 质点碰撞皮肤厚度 u（perimeter 线不嵌入平台）
 
+        // —— stranding leash（解 BUG-2026-07-05：cp 掉到平台下、软体被平台顶面反复顶住、
+        // 视觉永久卡在平台顶）——
+        // 判据 = 视觉质心↔cp 偏离超 leash **且** cp 明显在质心下方（stranding 签名：
+        // 软体在上、cp 在下且够不着）。命中则本子步关碰撞让软体 ooze 追回 cp。纯横向 apex
+        // overshoot（cp 与软体同高）不命中，故不误伤正常跳跃。<=0 关闭门控=恒碰撞（旧行为）。
+        float strandingLeash = 0.9f;
+
         // —— 渲染开关 ——
         bool drawSpokes   = true; // 画 center→perimeter 辐条
         bool drawCpMarker = true; // 叠画 control point 小标记（对比 gameplay 真相）
@@ -138,16 +145,31 @@ namespace spike01
                 mPos[i]                = newPos;
             }
 
+            // stranding 门控（BUG-2026-07-05）：软体在上、cp 在下且偏离超 leash 时关碰撞，
+            // 让软体穿过障碍 ooze 回 cp（视觉层允许作弊，gameplay 真相在 cp）。仅横向 apex
+            // overshoot（cp 与软体同高）不命中，正常跳跃碰撞照常。
+            const glm::vec2 centroidNow = Centroid();
+            const bool      collide =
+                (p.strandingLeash <= 0.0f) ||
+                !(glm::length(centroidNow - cpPos) > p.strandingLeash &&
+                  cpPos.y < centroidNow.y - p.blobRadius * 0.5f);
+
             // —— 2. PBD 约束迭代（迭代次数走 slider）——
             const int iters = std::max(1, p.constraintIters);
             for (int it = 0; it < iters; ++it)
             {
                 SatisfyDistance(p.edgeStiffness);
                 SatisfyArea(p.areaStiffness);
-                SatisfyCollision(level, p.skin);
+                if (collide)
+                {
+                    SatisfyCollision(level, p.skin);
+                }
             }
             // —— 3. 末尾碰撞投影（约束可能把点又推回盒内，最后再清一次）——
-            SatisfyCollision(level, p.skin);
+            if (collide)
+            {
+                SatisfyCollision(level, p.skin);
+            }
         }
 
         // 视觉质心 = perimeter 点平均（用于 apex 分叉测量；不含中心点更贴"看起来的中心"）。
