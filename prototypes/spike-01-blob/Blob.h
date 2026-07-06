@@ -182,6 +182,26 @@ namespace spike01
             return mInit;
         }
 
+        // 状态形变：设各向异性目标形状（对基础圆 rest 的 2x2 变换，如 diag(sx,sy) / 旋转）。
+        // 重建 rest 几何（restOffset / edge / spoke / area 全随变换）使 PBD 约束与弹簧目标一致，
+        // 避免约束把形变拽回圆。默认单位矩阵=正圆（向后兼容）。形状不变则跳过重建省开销。
+        void SetTargetShape(const glm::mat2& shape)
+        {
+            if (mInit && mTargetShape[0] == shape[0] && mTargetShape[1] == shape[1])
+            {
+                return;
+            }
+            mTargetShape = shape;
+            if (mInit)
+            {
+                BuildRestGeometry(mRadius);
+            }
+        }
+        const glm::mat2& TargetShape() const noexcept
+        {
+            return mTargetShape;
+        }
+
     private:
         // 重建 rest 几何（restOffset / 边 rest 长 / 辐条 rest 长 / rest 面积）。
         // CCW 排列保证 signed area 为正，area 约束梯度方向自洽。
@@ -189,23 +209,28 @@ namespace spike01
         {
             mRadius            = radius;
             const float kTwoPi = 6.28318530718f;
+            // 基础圆经 target shape 变换 = 各状态目标形状（默认单位 → 正圆）。
             for (int i = 0; i < mPerimeter; ++i)
             {
-                const float ang = kTwoPi * static_cast<float>(i) / static_cast<float>(mPerimeter);
-                mRestOffset[i]  = glm::vec2(std::cos(ang), std::sin(ang)) * radius;
+                const float     ang  = kTwoPi * static_cast<float>(i) / static_cast<float>(mPerimeter);
+                const glm::vec2 base = glm::vec2(std::cos(ang), std::sin(ang)) * radius;
+                mRestOffset[i]       = mTargetShape * base;
             }
             mRestOffset[mPerimeter] = glm::vec2(0.0f); // 中心点
 
-            // 相邻 perimeter 边 rest 长（正多边形等长，仍逐边存以备非规则形状）。
+            // 边 + 辐条 rest 长逐条存：各向异性变换后不再等长，须逐条记真实 rest，
+            // 否则 distance 约束会把形变拽回基础圆（与弹簧目标打架）。
             mEdgeRest.assign(mPerimeter, 0.0f);
+            mSpokeRest.assign(mPerimeter, 0.0f);
             for (int i = 0; i < mPerimeter; ++i)
             {
-                const int j  = (i + 1) % mPerimeter;
-                mEdgeRest[i] = glm::length(mRestOffset[j] - mRestOffset[i]);
+                const int j   = (i + 1) % mPerimeter;
+                mEdgeRest[i]  = glm::length(mRestOffset[j] - mRestOffset[i]);
+                mSpokeRest[i] = glm::length(mRestOffset[i]);
             }
-            mSpokeRest = radius; // center→perimeter 辐条 rest 长
 
-            // rest 面积（perimeter 多边形 signed area）。
+            // rest 面积（perimeter 多边形 signed area，已含 target shape 的 det 缩放 →
+            // area 约束保持变换后面积，不把各向异性形变拽回圆）。
             mRestArea = PolygonSignedArea(mRestOffset);
         }
 
@@ -223,7 +248,7 @@ namespace spike01
             const int c = mPerimeter;
             for (int i = 0; i < mPerimeter; ++i)
             {
-                SolveDistance(c, i, mSpokeRest, stiffness);
+                SolveDistance(c, i, mSpokeRest[i], stiffness);
             }
         }
 
@@ -377,10 +402,11 @@ namespace spike01
         std::vector<glm::vec2> mRestOffset; // 相对 cp 的静止偏移（spring target = cp + restOffset）
         std::vector<glm::vec2> mAreaGrad;   // area 约束梯度 scratch（size = mPerimeter）
 
-        std::vector<float> mEdgeRest;          // 相邻 perimeter 边 rest 长（size = mPerimeter）
-        float              mSpokeRest = 0.0f;  // 辐条 rest 长（= radius）
-        float              mRestArea  = 0.0f;  // perimeter 多边形 rest 面积
-        float              mRadius    = -1.0f; // 当前 rest 半径（!= slider 则重建）
+        std::vector<float> mEdgeRest;           // 相邻 perimeter 边 rest 长（size = mPerimeter）
+        std::vector<float> mSpokeRest;          // 每条 center→perimeter 辐条 rest 长（各向异性变形后逐条不同）
+        float              mRestArea  = 0.0f;   // perimeter 多边形 rest 面积（含 target shape 的 det 缩放）
+        float              mRadius    = -1.0f;  // 当前 rest 半径（!= slider 则重建）
+        glm::mat2          mTargetShape{1.0f};  // 状态形变：对基础圆 rest 施加的各向异性变换（默认单位=正圆）
         bool               mInit      = false;
     };
 

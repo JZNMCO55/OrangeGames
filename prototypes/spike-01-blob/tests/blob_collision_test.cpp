@@ -106,6 +106,43 @@ int main()
         check("C 静止骑线", blob);
     }
 
+    // D target shape（D0 形变地基）：设 diag(0.7,1.5) 横缩纵拉，空中静止 step，验 perimeter
+    // 排成竖椭圆(y范围>x范围) + area/distance 约束保持变换后形状(纵横比不被 PBD 拽回圆)。
+    {
+        Blob            blob(14);
+        const glm::vec2 cp{0.0f, 5.0f}; // 空中，远离关卡碰撞
+        blob.Reset(cp, params.blobRadius);
+        blob.SetTargetShape(glm::mat2(0.7f, 0.0f, 0.0f, 1.5f)); // 列主序 diag(0.7,1.5)
+        const std::vector<LevelBox> empty;
+        for (int step = 0; step < 300; ++step)
+        {
+            blob.Step(kFixedDt, cp, empty, params);
+        }
+        const auto& bp = blob.Positions();
+        const int   n  = blob.PerimeterCount();
+        float       mnx = 1e9f, mxx = -1e9f, mny = 1e9f, mxy = -1e9f;
+        for (int i = 0; i < n; ++i)
+        {
+            mnx = std::min(mnx, bp[i].x);
+            mxx = std::max(mxx, bp[i].x);
+            mny = std::min(mny, bp[i].y);
+            mxy = std::max(mxy, bp[i].y);
+        }
+        const float wx = mxx - mnx, wy = mxy - mny;
+        std::printf("[D target shape] x范围=%.3f y范围=%.3f 纵横比=%.2f (期望≈2.14 竖椭圆)\n",
+                    wx, wy, (wx > 1e-6f) ? wy / wx : 0.0f);
+        if (wy <= wx)
+        {
+            std::printf("  FAIL: 未成竖椭圆\n");
+            ++failures;
+        }
+        if (wx > 1e-6f && wy / wx < 1.6f)
+        {
+            std::printf("  FAIL: 纵横比不足（target shape 被 PBD 拽回圆?）\n");
+            ++failures;
+        }
+    }
+
     std::printf("\n结果：%s（failures=%d）\n", failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;
 }
