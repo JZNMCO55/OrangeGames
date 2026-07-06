@@ -51,12 +51,17 @@ namespace spike01
         SlimeMetaballPass();
         ~SlimeMetaballPass() override; // 在 .cpp defaulted，让 RHI unique_ptr 成员析构在完整类型下实例化
 
-        // M1 调参（ImGui live）：falloffScale = 融合半径相对 blob 投影半径的倍数
-        //（太小散成珠子、太大糊团）；isoLevel = 剪影阈值（越高剪影越紧）。
+        // 调参（ImGui live）。M1：falloffScale = 融合半径相对 blob 投影半径的倍数
+        //（太小散珠子、太大糊团）；isoLevel = 剪影阈值。M2 材质（值迁移自 Tier1 SlimeParams）：
+        // domeScale = 半球半径 / blob 投影半径（对齐剪影胖度）；rimGain/specGain/ambient。
         struct Tunables
         {
-            float falloffScale = 1.0f; // falloff = falloffScale × blob 投影半径（ndc-y）
-            float isoLevel     = 0.6f; // smoothstep 阈值
+            float falloffScale = 1.0f;  // M1：falloff = falloffScale × blob 投影半径（ndc-y）
+            float isoLevel     = 0.6f;  // M1：smoothstep 剪影阈值
+            float domeScale    = 1.6f;  // M2：半球半径倍数（≈ 默认剪影胖度，对齐 dome 与剪影）
+            float rimGain      = 0.85f; // M2：Fresnel 亮边强度（Tier1 值）
+            float specGain     = 1.15f; // M2：湿润高光强度（Tier1 值）
+            float ambient      = 0.30f; // M2：环境光基线（Tier1 值）
         };
 
         const char* Name() const noexcept override { return "SlimeMetaballPass"; }
@@ -76,11 +81,14 @@ namespace spike01
                      glm::vec2 centroidWorld, float radius);
 
     private:
-        // std140 UBO，与 slime_metaball.frag 逐字对齐：mat4(64) + vec4(16) + vec4[16](256)。
+        // std140 UBO，与 slime_metaball.frag 逐字对齐：
+        // mat4(64) + vec4×3(48) + vec4[16](256) = 368B。
         struct SlimeUbo
         {
-            float uViewProj[16];          // world -> clip（M0 单位阵；M1 = ctx.pViewProjData）
+            float uViewProj[16];          // world -> clip（= ctx.pViewProjData）
             float uParams0[4];            // x=count, y=isoLevel, z=aspect, w=falloffRadius(ndc-y)
+            float uParams1[4];            // x=blobNdcRadius, y=domeScale, z=rimGain, w=specGain
+            float uParams2[4];            // x=ambient（其余备用）
             float uPoints[kMaxPoints][4]; // xy=world pos（末尾一个是 centroid）
         };
 

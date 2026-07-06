@@ -733,16 +733,20 @@ namespace
                 // 平滑剪影）。开启时默认隐藏 Tier 1 CPU gel；关掉退回 Tier 1 便于对比。
                 if (mpSdfPass)
                 {
-                    ImGui::SeparatorText("Tier 2 SDF pass (M1 剪影, 接管渲染)");
+                    ImGui::SeparatorText("Tier 2 SDF pass (M2 gel 着色, 接管渲染)");
                     bool sdfOn = mpSdfPass->IsEnabled();
-                    if (ImGui::Checkbox("SDF metaball pass (逐像素剪影)", &sdfOn))
+                    if (ImGui::Checkbox("SDF metaball pass (逐像素 gel)", &sdfOn))
                     {
                         mpSdfPass->SetEnabled(sdfOn);
                     }
                     auto& t = mpSdfPass->GetTunables();
                     ImGui::SliderFloat("falloff scale (融合半径倍数)", &t.falloffScale, 0.4f, 2.5f);
                     ImGui::SliderFloat("iso level (剪影阈值)", &t.isoLevel, 0.1f, 2.0f);
-                    ImGui::TextDisabled("falloff 太小→散珠子; 太大→糊团。iso 越高剪影越紧。");
+                    ImGui::SliderFloat("dome scale (半球半径倍数)", &t.domeScale, 0.8f, 2.5f);
+                    ImGui::SliderFloat("rim gain (Fresnel 亮边)", &t.rimGain, 0.0f, 2.0f);
+                    ImGui::SliderFloat("spec gain (湿润高光)", &t.specGain, 0.0f, 3.0f);
+                    ImGui::SliderFloat("ambient (环境基线)", &t.ambient, 0.0f, 1.0f);
+                    ImGui::TextDisabled("falloff/iso 定剪影; dome 对齐半球胖度到剪影; rim/spec/ambient 调 gel 质感。");
                 }
             }
 

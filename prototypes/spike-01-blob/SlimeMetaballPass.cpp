@@ -251,6 +251,13 @@ namespace spike01
             pUbo->uParams0[2] = aspect;
             pUbo->uParams0[3] = falloffNdc;
 
+            // M2 材质参数：blobNdcRadius 供 shader 算显式半球，其余是迁移自 Tier1 的 gel 旋钮。
+            pUbo->uParams1[0] = blobNdcRadius;
+            pUbo->uParams1[1] = mTunables.domeScale;
+            pUbo->uParams1[2] = mTunables.rimGain;
+            pUbo->uParams1[3] = mTunables.specGain;
+            pUbo->uParams2[0] = mTunables.ambient;
+
             for (int i = 0; i < n; ++i)
             {
                 pUbo->uPoints[i][0] = mPerimeterWorld[i].x;
