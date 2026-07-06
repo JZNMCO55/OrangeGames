@@ -49,6 +49,9 @@
 // Loop B —— 软体 blob 仿真（自写 Verlet/PBD，纯游戏代码；见 Blob.h 头注释）。
 #include "Blob.h"
 
+// Tier 2 M0 —— 自定义 fullscreen SDF metaball pass（下沉到 RHI，证明管线打通）。
+#include "SlimeMetaballPass.h"
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -434,8 +437,9 @@ namespace
     {
     public:
         SpikeLayer(Pipeline& pipeline, World& world, Phys::PhysicsWorld& phys,
-                   Phys::BodyHandle cp, std::vector<LevelBox> level, BloomPass* bloom = nullptr)
-            : Layer("SpikeLayer"), mPipeline(pipeline), mWorld(world), mPhys(phys), mCp(cp), mLevel(std::move(level)), mpBloom(bloom)
+                   Phys::BodyHandle cp, std::vector<LevelBox> level, BloomPass* bloom = nullptr,
+                   spike01::SlimeMetaballPass* sdfPass = nullptr)
+            : Layer("SpikeLayer"), mPipeline(pipeline), mWorld(world), mPhys(phys), mCp(cp), mLevel(std::move(level)), mpBloom(bloom), mpSdfPass(sdfPass)
         {
             BuildActionMap();
             mVxHistory.fill(0.0f);
@@ -714,6 +718,19 @@ namespace
                 else
                 {
                     ImGui::TextDisabled("(bloom pass 未接入)");
+                }
+
+                // Tier 2 M0：自定义 SDF metaball pass 开关。开=屏幕中心叠一个平滑绿圆
+                //（硬编码 1 质点、不接 blob），仅证明整条 RHI 管线在引擎里跑通。
+                if (mpSdfPass)
+                {
+                    ImGui::SeparatorText("Tier 2 SDF pass (M0 管线打通)");
+                    bool sdfOn = mpSdfPass->IsEnabled();
+                    if (ImGui::Checkbox("SDF metaball pass (屏幕中心测试圆)", &sdfOn))
+                    {
+                        mpSdfPass->SetEnabled(sdfOn);
+                    }
+                    ImGui::TextDisabled("M0 硬编码中心 1 质点; 与 Tier 1 CPU gel 并存便于对比。");
                 }
             }
 
@@ -1272,6 +1289,7 @@ namespace
         std::vector<LevelBox> mLevel;
         BloomPass*            mpBloom = nullptr; // Tier 0 slime glow：live 调 bloom 阈值/强度
         SlimeParams           mSlime;            // Tier 0 实心史莱姆外观
+        spike01::SlimeMetaballPass* mpSdfPass = nullptr; // Tier 2 M0：SDF pass 运行时开关
 
         // 输入
         In::InputContext mInput;
@@ -1470,7 +1488,15 @@ int main()
     }
     pipeline.SetPostProcessChain(&slimeChain);
 
-    host->PushLayer(std::make_unique<SpikeLayer>(pipeline, world, physWorld, cpBody, level, slimeBloom));
+    // —— Tier 2 M0：注入自定义 fullscreen SDF metaball pass ——
+    // InsertPass(AfterMainPass) —— 主 pass + 粒子已写完 HDR、bloom 还没跑的 hook 点，
+    // pass 自己 transition + BeginRendering + Draw + EndRendering（见 SlimeMetaballPass）。
+    // 输出叠在 HDR 上 → 自动喂现有 bloom 链。Pipeline 立即调一次 Setup 建 GPU 资源。
+    auto                        slimeSdfPass = std::make_unique<spike01::SlimeMetaballPass>();
+    spike01::SlimeMetaballPass* pSlimeSdfPass = slimeSdfPass.get();
+    pipeline.InsertPass(Orange::Engine::Render::PipelineStage::AfterMainPass, std::move(slimeSdfPass));
+
+    host->PushLayer(std::make_unique<SpikeLayer>(pipeline, world, physWorld, cpBody, level, slimeBloom, pSlimeSdfPass));
 
     const int rc = host->Run();
     pipeline.Shutdown();
