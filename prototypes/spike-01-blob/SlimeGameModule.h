@@ -137,15 +137,19 @@ namespace spike01
         float eyeSize         = 0.21f;
     };
 
-    // D1 形变驱动状态（12 状态核心的子集；Crouch/Squeezed/Rolling defer，见原 spike 注释）。
+    // D1 形变驱动状态（对齐 12 态参考图）。Crouch/Rolling/Squeezed 无 open-ground emergent
+    // 触发（输入接线 defer），经 forced-state 摆姿（showcase / 未来 demo trigger）。
     enum class SlimeMotionState
     {
         Idle,
-        Launch,
+        Crouch,   // 下压/蓄力：宽扁矮
+        Launch,   // 拉伸：起跳前纵向拉长
         Rising,
         Falling,
         Landing,
         Sliding,
+        Rolling,  // 滚动：椭圆 + 翻滚（旋转 target shape）
+        Squeezed, // 受挤压：窄缝压扁
     };
 
     // 自动演示阶段（attract / 免手玩动态验证：脚本注入虚拟输入，复用真实手感）。
@@ -335,6 +339,13 @@ namespace spike01
         float            mCurSy              = 0.80f;
         float            mCurStiff           = 200.0f;
         float            mDeformTau          = 0.06f;
+
+        // 强制姿态（showcase / 未来 demo trigger）：置位则 UpdateDeform 用 mForcedState 取代
+        // 物理派生态，令无 emergent 触发的 Crouch/Rolling/Squeezed 也能摆出。正常玩法恒 false。
+        bool             mHasForcedState     = false;
+        SlimeMotionState mForcedState        = SlimeMotionState::Idle;
+        float            mRollAngle          = 0.0f; // Rolling 翻滚角（rad）
+        float            mRollSpeed          = 3.2f; // 翻滚角速度（rad/s）
 
         // 自动演示
         bool      mAutoDemo      = false;

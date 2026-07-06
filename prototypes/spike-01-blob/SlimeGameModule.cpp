@@ -88,12 +88,15 @@ namespace spike01
         {
             switch (s)
             {
-                case SlimeMotionState::Idle:    return {1.15f, 0.80f, 200.0f}; // 矮 dome
-                case SlimeMotionState::Launch:  return {0.70f, 1.55f, 120.0f}; // 高瘦柱
-                case SlimeMotionState::Rising:  return {0.95f, 1.10f, 200.0f}; // 饱满略纵长
-                case SlimeMotionState::Falling: return {0.88f, 1.20f, 180.0f}; // 纵长下垂
-                case SlimeMotionState::Landing: return {1.60f, 0.42f, 350.0f}; // 极扁冲击
-                case SlimeMotionState::Sliding: return {1.50f, 0.72f, 200.0f}; // 横躺拉长
+                case SlimeMotionState::Idle:     return {1.15f, 0.80f, 200.0f}; // 矮 dome
+                case SlimeMotionState::Crouch:   return {1.42f, 0.60f, 420.0f}; // 蓄力宽扁
+                case SlimeMotionState::Launch:   return {0.70f, 1.55f, 120.0f}; // 高瘦柱
+                case SlimeMotionState::Rising:   return {0.95f, 1.10f, 200.0f}; // 饱满略纵长
+                case SlimeMotionState::Falling:  return {0.82f, 1.28f, 180.0f}; // 纵长水滴倾向
+                case SlimeMotionState::Landing:  return {1.60f, 0.42f, 350.0f}; // 极扁冲击
+                case SlimeMotionState::Sliding:  return {1.50f, 0.72f, 200.0f}; // 横躺拉长
+                case SlimeMotionState::Rolling:  return {1.24f, 0.82f, 230.0f}; // 椭圆（旋转在 UpdateDeform 叠加）
+                case SlimeMotionState::Squeezed: return {1.34f, 0.66f, 320.0f}; // 窄缝压扁
             }
             return {1.15f, 0.80f, 200.0f};
         }
@@ -1084,8 +1087,10 @@ namespace spike01
 
     void SlimeGameModule::UpdateDeform(float dt)
     {
-        // 总是派生状态（供 juice 溅射的落地检测），即使形变关闭。
-        mMotionState = DeriveMotionState(dt);
+        // 总是派生状态（DeriveMotionState 内含落地溅射检测 + 计时，不可跳），但强制姿态
+        // 置位时用 mForcedState 取代它做形变查表（showcase 摆姿）。
+        const SlimeMotionState derived = DeriveMotionState(dt);
+        mMotionState                   = mHasForcedState ? mForcedState : derived;
         if (!mDeformEnabled)
         {
             mBlob.SetTargetShape(glm::mat2(1.0f)); // 圆（退回手动 stiffness）
@@ -1099,7 +1104,20 @@ namespace spike01
         mCurSy += (tgt.sy - mCurSy) * a;
         mCurStiff += (tgt.stiffness - mCurStiff) * a;
 
-        mBlob.SetTargetShape(glm::mat2(mCurSx, 0.0f, 0.0f, mCurSy)); // 列主序 diag(sx,sy)
+        // Rolling：在各向异性 diag 上叠加翻滚旋转；其余态旋角归零。
+        glm::mat2 shape(mCurSx, 0.0f, 0.0f, mCurSy); // 列主序 diag(sx,sy)
+        if (mMotionState == SlimeMotionState::Rolling)
+        {
+            mRollAngle += dt * mRollSpeed;
+            const float c = std::cos(mRollAngle);
+            const float s = std::sin(mRollAngle);
+            shape = glm::mat2(c, s, -s, c) * shape; // R(angle) · diag
+        }
+        else
+        {
+            mRollAngle = 0.0f;
+        }
+        mBlob.SetTargetShape(shape);
         mBlobParams.stiffness = mCurStiff;
     }
 
