@@ -9,6 +9,10 @@
 #include <orange/rhi/RHIRendering.h>
 #include <orange/rhi/RHITexture.h>
 
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -62,6 +66,22 @@ namespace spike01
 
     SlimeMetaballPass::SlimeMetaballPass()  = default;
     SlimeMetaballPass::~SlimeMetaballPass() = default;
+
+    void SlimeMetaballPass::SetBlob(const glm::vec2* perimeterWorld, int count,
+                                    glm::vec2 centroidWorld, float radius)
+    {
+        if (perimeterWorld == nullptr || count <= 0)
+        {
+            mHasBlob = false;
+            return;
+        }
+        // 末尾一格留给 centroid，故 perimeter 最多 kMaxPoints-1 个。
+        const int n = std::min(count, kMaxPoints - 1);
+        mPerimeterWorld.assign(perimeterWorld, perimeterWorld + n);
+        mCentroidWorld = centroidWorld;
+        mBlobRadius    = radius;
+        mHasBlob       = true;
+    }
 
     void SlimeMetaballPass::Setup(RenderGraphBuilder& builder)
     {
@@ -178,6 +198,11 @@ namespace spike01
         {
             return;
         }
+        // M1：无 blob 数据（首帧 SetBlob 之前）就别画——不硬编码占位圆，避免闪一帧中心圆。
+        if (!mHasBlob || mPerimeterWorld.empty() || ctx.pViewProjData == nullptr)
+        {
+            return;
+        }
 
         Rhi::RHICommandList& cmd     = *ctx.pCmdList;
         Rhi::RHITextureView* hdrView = ctx.pHdrColorView;
@@ -188,25 +213,52 @@ namespace spike01
         const std::uint32_t slot        = static_cast<std::uint32_t>(ctx.frameIndex % kFramesInFlight);
         const std::uint64_t sliceOffset = static_cast<std::uint64_t>(slot) * mSliceBytes;
 
-        // 写本 slice：M0 硬编码 1 个屏幕中心质点。
+        const int   n      = static_cast<int>(mPerimeterWorld.size());
+        const float aspect = (ctx.height != 0)
+                                 ? static_cast<float>(ctx.width) / static_cast<float>(ctx.height)
+                                 : 1.0f;
+
+        // CPU 侧算 falloff 半径：投影 blob 到 NDC，取 centroid→perimeter 的平均 aspect-
+        // corrected 距离 = blob 屏幕半径（ndc-y 单位）。falloff 随该半径缩放 → 自适应
+        // 相机缩放 / blobRadius slider，不用在 pass 里拿 halfH。
+        const glm::mat4 viewProj = glm::make_mat4(ctx.pViewProjData);
+        auto            projNdc  = [&viewProj](glm::vec2 world)
+        {
+            const glm::vec4 clip = viewProj * glm::vec4(world, 0.0f, 1.0f);
+            const float     w    = (std::abs(clip.w) > 1e-6f) ? clip.w : 1.0f;
+            return glm::vec2(clip.x / w, clip.y / w);
+        };
+        const glm::vec2 centroidNdc = projNdc(mCentroidWorld);
+        float           sumR        = 0.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            glm::vec2 d = projNdc(mPerimeterWorld[i]) - centroidNdc;
+            d.x *= aspect; // screen-isotropic（同 shader 度量）
+            sumR += glm::length(d);
+        }
+        const float blobNdcRadius = (n > 0) ? (sumR / static_cast<float>(n)) : 0.1f;
+        const float falloffNdc    = std::max(1e-3f, mTunables.falloffScale * blobNdcRadius);
+
+        // 写本 slice：viewProj + 14 perimeter + 1 centroid（世界坐标）。
         if (auto* pMapped = static_cast<std::uint8_t*>(mUbo->Map()))
         {
             auto* pUbo = reinterpret_cast<SlimeUbo*>(pMapped + sliceOffset);
             std::memset(pUbo, 0, sizeof(SlimeUbo));
-            pUbo->uViewProj[0] = pUbo->uViewProj[5] = pUbo->uViewProj[10] = pUbo->uViewProj[15] = 1.0f;
+            std::memcpy(pUbo->uViewProj, ctx.pViewProjData, sizeof(float) * 16); // 列主序直拷
 
-            const float aspect = (ctx.height != 0)
-                                     ? static_cast<float>(ctx.width) / static_cast<float>(ctx.height)
-                                     : 1.0f;
-            pUbo->uParams0[0] = 1.0f;   // count
-            pUbo->uParams0[1] = 0.5f;   // isoLevel
-            pUbo->uParams0[2] = aspect; // aspect
-            pUbo->uParams0[3] = 0.0f;   // time（M0 未用）
+            pUbo->uParams0[0] = static_cast<float>(n + 1); // count = perimeter + centroid
+            pUbo->uParams0[1] = mTunables.isoLevel;
+            pUbo->uParams0[2] = aspect;
+            pUbo->uParams0[3] = falloffNdc;
 
-            pUbo->uPoints[0][0] = 0.0f; // NDC x（屏幕中心）
-            pUbo->uPoints[0][1] = 0.0f; // NDC y
-            pUbo->uPoints[0][2] = 0.4f; // radius
-            pUbo->uPoints[0][3] = 0.0f; // weight（M0 未用）
+            for (int i = 0; i < n; ++i)
+            {
+                pUbo->uPoints[i][0] = mPerimeterWorld[i].x;
+                pUbo->uPoints[i][1] = mPerimeterWorld[i].y;
+            }
+            // 末尾一格 = centroid，填实内部（避免 metaball 环状中空）。
+            pUbo->uPoints[n][0] = mCentroidWorld.x;
+            pUbo->uPoints[n][1] = mCentroidWorld.y;
 
             mUbo->Unmap();
         }

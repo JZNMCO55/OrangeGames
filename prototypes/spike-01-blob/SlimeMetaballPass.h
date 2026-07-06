@@ -1,12 +1,12 @@
 #ifndef SPIKE01_SLIME_METABALL_PASS_H
 #define SPIKE01_SLIME_METABALL_PASS_H
 
-// Tier 2 M0 —— 自定义 fullscreen SDF metaball pass。
+// Tier 2 —— 自定义 fullscreen SDF metaball pass。
 //
-// 目标只有一个：证明整条 RHI 管线（graphics pipeline / descriptor / UBO / alpha
-// blend / layout transition）能在引擎的 InsertPass(AfterMainPass) hook 下跑通，
-// 出一个平滑圆 alpha-blend 合成到 HDR 上屏。**不追求好看、不接真 blob 数据**
-//（M0 硬编码 1 个屏幕中心质点，逐像素密度场出圆）。
+// M0：证明整条 RHI 管线（pipeline / descriptor / UBO / alpha blend / layout
+// transition）在引擎 InsertPass(AfterMainPass) hook 下跑通（硬编码中心 1 质点）。
+// M1：接真 blob 软体——每帧 SetBlob 灌 14 perimeter + 1 centroid 世界坐标，逐像素
+// 多质点 metaball 密度场投影出连续平滑史莱姆剪影（跟随 blob，纯绿 mask，着色留 M2）。
 //
 // consumer 允许直接 #include <orange/rhi/...>（header isolation 只约束引擎内部，
 // 不约束游戏侧；IRenderPass 就是引擎为游戏开的下沉到 RHI 级的逃生舱口）。本头
@@ -15,9 +15,12 @@
 #include <orange/engine/render/IRenderPass.h>
 #include <orange/engine/render/RenderPassContext.h>
 
+#include <glm/vec2.hpp>
+
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace Orange::Rhi
 {
@@ -48,6 +51,14 @@ namespace spike01
         SlimeMetaballPass();
         ~SlimeMetaballPass() override; // 在 .cpp defaulted，让 RHI unique_ptr 成员析构在完整类型下实例化
 
+        // M1 调参（ImGui live）：falloffScale = 融合半径相对 blob 投影半径的倍数
+        //（太小散成珠子、太大糊团）；isoLevel = 剪影阈值（越高剪影越紧）。
+        struct Tunables
+        {
+            float falloffScale = 1.0f; // falloff = falloffScale × blob 投影半径（ndc-y）
+            float isoLevel     = 0.6f; // smoothstep 阈值
+        };
+
         const char* Name() const noexcept override { return "SlimeMetaballPass"; }
         void        Setup(Orange::Engine::Render::RenderGraphBuilder& builder) override;
         void        Execute(Orange::Engine::Render::RenderPassContext& ctx) override;
@@ -56,16 +67,31 @@ namespace spike01
         void SetEnabled(bool enabled) noexcept { mEnabled = enabled; }
         bool IsEnabled() const noexcept { return mEnabled; }
 
+        Tunables& GetTunables() noexcept { return mTunables; }
+
+        // M1 数据流：每帧 blob.Step 之后由 SpikeLayer 调，缓存 perimeter 世界坐标 +
+        // centroid + radius。Execute 用缓存写 UBO。perimeterWorld 指向 blob.Positions()
+        // 前 count 个 perimeter 点；count 超 kMaxPoints-1 时截断（末尾留给 centroid）。
+        void SetBlob(const glm::vec2* perimeterWorld, int count,
+                     glm::vec2 centroidWorld, float radius);
+
     private:
         // std140 UBO，与 slime_metaball.frag 逐字对齐：mat4(64) + vec4(16) + vec4[16](256)。
         struct SlimeUbo
         {
-            float uViewProj[16];             // M1 才用；M0 留单位阵占位
-            float uParams0[4];               // x=count, y=isoLevel, z=aspect, w=time
-            float uPoints[kMaxPoints][4];    // xy=NDC, z=radius, w=weight
+            float uViewProj[16];          // world -> clip（M0 单位阵；M1 = ctx.pViewProjData）
+            float uParams0[4];            // x=count, y=isoLevel, z=aspect, w=falloffRadius(ndc-y)
+            float uPoints[kMaxPoints][4]; // xy=world pos（末尾一个是 centroid）
         };
 
-        bool mEnabled = true;
+        bool     mEnabled = true;
+        Tunables mTunables;
+
+        // M1 blob 缓存（SetBlob 写、Execute 读；同线程无需同步）。
+        std::vector<glm::vec2> mPerimeterWorld;
+        glm::vec2              mCentroidWorld{0.0f, 0.0f};
+        float                  mBlobRadius = 0.5f;
+        bool                   mHasBlob    = false;
 
         Orange::Rhi::RHIDevice* mpDevice = nullptr; // Setup 缓存的借用指针
 

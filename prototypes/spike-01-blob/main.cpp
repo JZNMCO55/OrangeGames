@@ -534,6 +534,15 @@ namespace
                 mWallJumpFlash = std::max(0.0f, mWallJumpFlash - dt);
             }
 
+            // Tier 2 M1：把最新 blob 软体喂给 SDF pass（perimeter 世界坐标 + centroid +
+            // radius）。Execute 在下面 Render 里用缓存写 UBO 逐像素出剪影。
+            if (mpSdfPass && mBlob.Initialized())
+            {
+                const auto& bp = mBlob.Positions();
+                mpSdfPass->SetBlob(bp.data(), mBlob.PerimeterCount(), mBlob.Centroid(),
+                                   mBlobParams.blobRadius);
+            }
+
             DrawDebug();
             mPipeline.Render(mWorld);
 
@@ -720,17 +729,20 @@ namespace
                     ImGui::TextDisabled("(bloom pass 未接入)");
                 }
 
-                // Tier 2 M0：自定义 SDF metaball pass 开关。开=屏幕中心叠一个平滑绿圆
-                //（硬编码 1 质点、不接 blob），仅证明整条 RHI 管线在引擎里跑通。
+                // Tier 2 M1：逐像素 SDF metaball pass 接管史莱姆渲染（跟随真 blob 出连续
+                // 平滑剪影）。开启时默认隐藏 Tier 1 CPU gel；关掉退回 Tier 1 便于对比。
                 if (mpSdfPass)
                 {
-                    ImGui::SeparatorText("Tier 2 SDF pass (M0 管线打通)");
+                    ImGui::SeparatorText("Tier 2 SDF pass (M1 剪影, 接管渲染)");
                     bool sdfOn = mpSdfPass->IsEnabled();
-                    if (ImGui::Checkbox("SDF metaball pass (屏幕中心测试圆)", &sdfOn))
+                    if (ImGui::Checkbox("SDF metaball pass (逐像素剪影)", &sdfOn))
                     {
                         mpSdfPass->SetEnabled(sdfOn);
                     }
-                    ImGui::TextDisabled("M0 硬编码中心 1 质点; 与 Tier 1 CPU gel 并存便于对比。");
+                    auto& t = mpSdfPass->GetTunables();
+                    ImGui::SliderFloat("falloff scale (融合半径倍数)", &t.falloffScale, 0.4f, 2.5f);
+                    ImGui::SliderFloat("iso level (剪影阈值)", &t.isoLevel, 0.1f, 2.0f);
+                    ImGui::TextDisabled("falloff 太小→散珠子; 太大→糊团。iso 越高剪影越紧。");
                 }
             }
 
@@ -1239,7 +1251,9 @@ namespace
                 // —— Tier 0 实心史莱姆：中心扇形填充 + 2 环径向渐变（core→edge）——
                 // AddTriangle 输出到 HDR target、在 bloom 之前 → 亮色自动晕开发光
                 // （见 DebugDrawScene 头 18-23 行）。轮廓经 Catmull-Rom 平滑去 faceted。
-                if (mSlime.fill)
+                // Tier 2 SDF pass 开启时接管史莱姆渲染，跳过 Tier 1 CPU gel（关掉 SDF 恢复）。
+                const bool sdfActive = mpSdfPass && mpSdfPass->IsEnabled();
+                if (mSlime.fill && !sdfActive)
                 {
                     std::vector<glm::vec2>       peri(bp.begin(), bp.begin() + n);
                     const std::vector<glm::vec2> ring = SmoothClosedCatmullRom(peri, mSlime.silhouetteSub);
@@ -1488,7 +1502,7 @@ int main()
     }
     pipeline.SetPostProcessChain(&slimeChain);
 
-    // —— Tier 2 M0：注入自定义 fullscreen SDF metaball pass ——
+    // —— Tier 2：注入自定义 fullscreen SDF metaball pass（M1 接真 blob 出剪影）——
     // InsertPass(AfterMainPass) —— 主 pass + 粒子已写完 HDR、bloom 还没跑的 hook 点，
     // pass 自己 transition + BeginRendering + Draw + EndRendering（见 SlimeMetaballPass）。
     // 输出叠在 HDR 上 → 自动喂现有 bloom 链。Pipeline 立即调一次 Setup 建 GPU 资源。
