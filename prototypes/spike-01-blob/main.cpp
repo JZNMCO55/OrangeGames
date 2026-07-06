@@ -489,6 +489,35 @@ namespace
     constexpr float kSlideVxThresh       = 6.0f;  // grounded 且 |vx| 超此 → Sliding
 
     // ===========================================================================
+    // 自动演示（attract / 免手玩动态验证）——键盘进不去 GLFW 窗口，脚本轮一遍所有动态
+    // 状态供截图。脚本经"虚拟输入"注入（设 mMoveAxis / mJumpHeld / jump buffer，复用真实
+    // 手感 + Box2D 物理），故演示的形变 = 真实手感的形变。
+    // ===========================================================================
+    enum class DemoPhase
+    {
+        Stand,    // 站立看 Idle 矮 dome
+        Jump,     // 起跳看 Launch→Rising→Falling→Landing→回弹（原地，留在视野）
+        RunRight, // 向右跑看 Sliding
+        StopR,    // 减速回 Idle
+        RunLeft,  // 向左跑看 Sliding 反向
+        StopL,    // 减速回 Idle → 循环
+    };
+
+    const char* DemoPhaseName(DemoPhase p)
+    {
+        switch (p)
+        {
+            case DemoPhase::Stand:    return "Stand (Idle)";
+            case DemoPhase::Jump:     return "Jump (Launch/Rising/Falling/Landing)";
+            case DemoPhase::RunRight: return "RunRight (Sliding)";
+            case DemoPhase::StopR:    return "StopR (-> Idle)";
+            case DemoPhase::RunLeft:  return "RunLeft (Sliding)";
+            case DemoPhase::StopL:    return "StopL (-> Idle)";
+        }
+        return "?";
+    }
+
+    // ===========================================================================
     // SpikeLayer —— Loop A 全部逻辑（输入 + 固定步长物理 + 手感 + overlay + 调参面板）。
     // ===========================================================================
     class SpikeLayer : public Layer
@@ -539,11 +568,20 @@ namespace
         {
             // 主循环顺序：PollEvents → OnEvent（本帧 key 已 Post）→ OnUpdate（此处读状态）。
             // ActionMap.BeginFrame 放在本函数末尾推进状态，所以这里读到的是本帧新鲜的边沿。
-            SampleInput();
-
             // —— 固定步长物理（accumulator，与渲染帧率解耦）——
             float dt = frame.time.deltaSeconds;
             dt       = std::clamp(dt, 0.0f, kMaxFrameDt);
+
+            // 输入源：真实键盘 / 自动演示脚本（后者注入虚拟 action，忽略键盘）。
+            if (mAutoDemo)
+            {
+                UpdateDemoScript(dt);
+            }
+            else
+            {
+                SampleInput();
+            }
+
             mRenderTime += dt; // gel 光斑漂移 / 眼呼吸 / 高光脉动（视觉动画，与物理步无关）
 
             // D1 形变：派生状态 → 查表目标 → 指数平滑 → 喂 blob（本帧所有固定子步共用同一形状 +
@@ -621,6 +659,23 @@ namespace
             ImGui::SetNextWindowPos(ImVec2(944.0f, 8.0f), ImGuiCond_FirstUseEver);
             ImGui::SetNextWindowSize(ImVec2(328.0f, 360.0f), ImGuiCond_FirstUseEver);
             ImGui::Begin("Loop A — control point 手感调参 (live, no recompile)");
+
+            // —— 自动演示（免手玩动态验证 / attract）：脚本轮一遍所有形变状态供截图 ——
+            if (ImGui::Checkbox("自动演示 (auto demo: 脚本驱动, 忽略键盘)", &mAutoDemo))
+            {
+                if (mAutoDemo)
+                {
+                    StartDemo();
+                }
+            }
+            if (mAutoDemo)
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f),
+                                   "自动演示中: 脚本驱动 control point, 键盘输入被忽略");
+                ImGui::Text("演示阶段: %s", DemoPhaseName(mDemoPhase));
+                ImGui::Text("形变状态: %s", MotionStateName(mMotionState));
+            }
+            ImGui::Separator();
 
             ImGui::TextUnformatted("操作: A/D 移动 | Space/W 跳跃 | 贴墙:按住朝墙下滑 · 贴墙跳=墙跳 · Shift 抓墙+↑↓攀爬");
             ImGui::TextUnformatted("一次只动一个旋钮，改完跑同一套测试路线对比。");
@@ -905,6 +960,92 @@ namespace
             if (moveEdge || jumpPressed)
             {
                 mInputFlashTimer = 0.15f;
+            }
+        }
+
+        // 开启演示：重置到第一阶段 + control point 回出生点（回到相机聚焦区，干净起步）。
+        void StartDemo()
+        {
+            mDemoPhase     = DemoPhase::Stand;
+            mDemoTimer     = 0.0f;
+            mDemoJumpFired = false;
+            ResetControlPoint();
+        }
+
+        void AdvanceDemoPhase(DemoPhase next)
+        {
+            mDemoPhase     = next;
+            mDemoTimer     = 0.0f;
+            mDemoJumpFired = false;
+        }
+
+        // 自动演示脚本：设虚拟 action（mMoveAxis / mJumpHeld / jump buffer）复用真实手感，
+        // 忽略键盘。跑/跳都走 Box2D + 现有跳跃手感 → blob 软体真实跟随形变。跑段按位置反向
+        // 保证 control point 留在相机视野（focus≈-5，无 follow-cam）。
+        void UpdateDemoScript(float dt)
+        {
+            // 每帧先清零虚拟输入（不注入抓墙 / 攀爬）。
+            mMoveAxis      = 0.0f;
+            mJumpHeld      = false;
+            mGrabHeld      = false;
+            mClimbUpHeld   = false;
+            mClimbDownHeld = false;
+
+            mDemoTimer += dt;
+            const float cpx = mCpState.position.x; // 上帧快照，够做视野边界判断
+
+            switch (mDemoPhase)
+            {
+                case DemoPhase::Stand:
+                    if (mDemoTimer >= 1.5f)
+                    {
+                        AdvanceDemoPhase(DemoPhase::Jump);
+                    }
+                    break;
+
+                case DemoPhase::Jump:
+                    mJumpHeld = true; // 全程按住 → 满跳（不触发松手切断）
+                    if (!mDemoJumpFired)
+                    {
+                        mJumpBufferTimer = mParams.jumpBufferTime; // 一次性触发起跳（同真实 jumpPressed）
+                        mDemoJumpFired   = true;
+                    }
+                    // 3.0s 够一次起跳 + 上升 + 下落 + 落地 + 回弹收敛。
+                    if (mDemoTimer >= 3.0f)
+                    {
+                        AdvanceDemoPhase(DemoPhase::RunRight);
+                    }
+                    break;
+
+                case DemoPhase::RunRight:
+                    mMoveAxis = 1.0f;
+                    if (cpx > kSpawn.x + 2.5f || mDemoTimer >= 1.5f)
+                    {
+                        AdvanceDemoPhase(DemoPhase::StopR);
+                    }
+                    break;
+
+                case DemoPhase::StopR:
+                    if (mDemoTimer >= 0.6f)
+                    {
+                        AdvanceDemoPhase(DemoPhase::RunLeft);
+                    }
+                    break;
+
+                case DemoPhase::RunLeft:
+                    mMoveAxis = -1.0f;
+                    if (cpx < kSpawn.x - 2.0f || mDemoTimer >= 1.5f)
+                    {
+                        AdvanceDemoPhase(DemoPhase::StopL);
+                    }
+                    break;
+
+                case DemoPhase::StopL:
+                    if (mDemoTimer >= 0.6f)
+                    {
+                        AdvanceDemoPhase(DemoPhase::Stand);
+                    }
+                    break;
             }
         }
 
@@ -1516,6 +1657,12 @@ namespace
         float            mCurSy              = 0.80f;
         float            mCurStiff           = 200.0f;
         float            mDeformTau          = 0.06f;  // 形变平滑时间常数（slider）
+
+        // —— 自动演示 ——
+        bool      mAutoDemo      = false;
+        DemoPhase mDemoPhase     = DemoPhase::Stand;
+        float     mDemoTimer     = 0.0f;
+        bool      mDemoJumpFired = false;
 
         // overlay / 判据
         float                  mInputFlashTimer = 0.0f;
