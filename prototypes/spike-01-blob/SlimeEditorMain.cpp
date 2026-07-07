@@ -63,6 +63,11 @@ int main(int argc, char** argv)
             const std::filesystem::path projPath =
                 std::filesystem::path(exeW).parent_path() / "slime.orangeproject";
             Orange::Editor::Project::ApplyProjectFileToConfig(projPath.string(), cfg);
+            // SlimeEditor 静态注入 SlimeGameModule（上文 cfg.modules）——slime.orangeproject
+            // 现声明 kind="dll"（M7 主路径 = 共享 SHARED OrangeEditor 热重载加载 slime.dll）。
+            // 本 static per-game editor 须清掉解析出的 DLL 路径，否则静态 + DLL 双份
+            // SlimeGameModule 并存驱动。SlimeEditor 自 M7 起降级为静态备用。
+            cfg.dllGameModulePaths.clear();
         }
     }
 #endif

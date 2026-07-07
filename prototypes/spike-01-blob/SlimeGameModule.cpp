@@ -305,6 +305,15 @@ namespace spike01
         pipeline.InsertPass(Render::PipelineStage::AfterMainPass, std::move(pass));
     }
 
+    void SlimeGameModule::UnregisterRenderPasses(Render::Pipeline& pipeline)
+    {
+        // RegisterRenderPasses 的对偶。DLL 热重载 FreeLibrary 前必须调——SlimeMetaballPass
+        // 的 vtable/代码在 slime.dll 内，卸载后 Pipeline 持悬垂 pass 会在 Execute/析构崩。
+        // AfterMainPass 上只有本模块 SDF pass（内置 post 走独立机制），清整 stage 安全。
+        pipeline.RemovePassesAt(Render::PipelineStage::AfterMainPass);
+        mpSdfPass = nullptr;
+    }
+
     void SlimeGameModule::OnEnterPlay(Game::GameModuleContext& ctx)
     {
         mpPhysics  = ctx.pPhysics;

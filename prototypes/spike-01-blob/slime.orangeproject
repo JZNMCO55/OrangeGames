@@ -3,6 +3,6 @@
   "name": "Slime",
   "assetRoots": ["."],
   "gameModules": [
-    { "kind": "static", "ref": "SlimeGameModule" }
+    { "kind": "dll", "ref": "slime.dll" }
   ]
 }

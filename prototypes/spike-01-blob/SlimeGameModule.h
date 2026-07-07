@@ -197,6 +197,9 @@ namespace spike01
         // 注册期：InsertPass(AfterMainPass) 接入 SDF metaball pass，存裸指针供 Tick 喂数据。
         void RegisterRenderPasses(Orange::Engine::Render::Pipeline& pipeline) override;
 
+        // 对偶：DLL 热重载卸载 slime.dll 前摘掉 SDF pass（pass 代码在 dll 内，悬垂会崩）。
+        void UnregisterRenderPasses(Orange::Engine::Render::Pipeline& pipeline) override;
+
         // Play：建关卡静态 body + control point body、复位 blob / 运行态。
         void OnEnterPlay(Orange::Engine::Game::GameModuleContext& ctx) override;
 
