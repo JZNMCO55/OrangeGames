@@ -46,6 +46,47 @@ add_custom_command(TARGET spike-01-blob POST_BUILD
     COMMENT "Compiling slime_metaball shaders")
 
 # ===========================================================================
+# slime_game_module（slime.dll）—— SlimeGameModule 的 game.dll 形态（PIE M7，ADR-023）。
+#
+# 与 SlimeEditor（静态链 SlimeGameModule）并存的 DLL 宿主路径：共享 OrangeEditor
+# 运行时经 GameModuleLibrary::Load(slime.dll) 动态加载 → Play 驱动 → Stop 卸载 →
+# 重编 → 重载（热重载）。SlimeGameModuleDllExport.cpp 用 ORANGE_EXPORT_GAME_MODULE
+# 宏导出 extern"C" OrangeCreateGameModule / OrangeDestroyGameModule。
+#
+# opt-in（默认 OFF）：只需在针对 **SHARED 引擎 SDK**（-DBUILD_SHARED_LIBS=ON 构建的
+# OrangeEngine/OrangeRender）消费时开——那样 slime.dll 经 dllimport 与宿主共享单份
+# 引擎（GImGui/Log/EnTT），产物小。对 STATIC 引擎 SDK 开会嵌入整份引擎（巨大且与
+# SlimeEditor 双静态），故默认不建。只链 OrangeEngine + OrangeRender，不碰 orange_editor。
+# ===========================================================================
+option(SPIKE01_BUILD_SLIME_DLL "构建 slime.dll 游戏模块（PIE M7 DLL 宿主；需 SHARED 引擎 SDK）" OFF)
+if (SPIKE01_BUILD_SLIME_DLL)
+    add_library(slime_game_module MODULE
+        SlimeGameModule.cpp
+        SlimeMetaballPass.cpp
+        SlimeTuningComponent.cpp
+        SlimeGameModuleDllExport.cpp)
+    set_target_properties(slime_game_module PROPERTIES OUTPUT_NAME "slime")
+    target_link_libraries(slime_game_module PRIVATE
+        OrangeEngine::orange_engine
+        OrangeRender::orange_render)
+    if (MSVC)  # 中文注释源、无 BOM → /utf-8
+        target_compile_options(slime_game_module PRIVATE /utf-8)
+    endif ()
+
+    # SDF pass shaders 拷到 slime.dll 旁（宿主编辑器按 exe-相对加载，standalone 验证也备）。
+    add_custom_command(TARGET slime_game_module POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:slime_game_module>/shaders"
+        COMMAND "${SPIKE01_GLSLANG}" -V
+                "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fullscreen.vert"
+                -o "$<TARGET_FILE_DIR:slime_game_module>/shaders/fullscreen.vert.spv"
+        COMMAND "${SPIKE01_GLSLANG}" -V
+                "${CMAKE_CURRENT_SOURCE_DIR}/shaders/slime_metaball.frag"
+                -o "$<TARGET_FILE_DIR:slime_game_module>/shaders/slime_metaball.frag.spv"
+        VERBATIM
+        COMMENT "Compiling slime_metaball shaders for slime.dll")
+endif ()
+
+# ===========================================================================
 # SlimeEditor.exe —— 史莱姆 per-game editor（PIE M4，ADR-021）。
 #
 # orange_editor SDK（瘦编辑器宿主）+ SlimeGameModule 注入：编辑器里 Play →
