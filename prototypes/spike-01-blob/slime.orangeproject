@@ -1,0 +1,8 @@
+{
+  "schemaVersion": { "namespace": "orange/project", "major": 1, "minor": 0 },
+  "name": "Slime",
+  "assetRoots": ["."],
+  "gameModules": [
+    { "kind": "static", "ref": "SlimeGameModule" }
+  ]
+}
