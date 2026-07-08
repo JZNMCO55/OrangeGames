@@ -32,19 +32,21 @@ namespace spike01
         // —— 视觉（Tier2 SDF 渲染；Play 期每帧重读 + schema 标 PlaySafe = 实时调）——
         // 默认值 = 2026-07-08 编辑器 2D 机位 + 暗场下 MCP live-tuning 对参考图收敛值
         //（与 SlimeMetaballPass::Tunables 默认值保持同步）。
-        glm::vec3 bodyColor  = {0.14f, 0.72f, 0.23f}; // 主体绿（薄处 / 边亮端）
-        glm::vec3 deepColor  = {0.03f, 0.22f, 0.07f}; // 核心深绿（厚处 / SSS 暗端）
+        glm::vec3 bodyColor  = {0.13f, 0.66f, 0.20f}; // 主体绿（下半通透亮端；梯度结构撑住后可抬亮）
+        glm::vec3 deepColor  = {0.03f, 0.26f, 0.08f}; // 上半深绿（垂直梯度深端 + 边缘吸收带色）
         glm::vec3 rimColor   = {0.62f, 1.00f, 0.50f}; // Fresnel 亮边
         glm::vec3 eyeColor   = {1.00f, 0.92f, 0.45f}; // 发光眼
-        glm::vec3 speckColor = {0.85f, 1.00f, 0.42f}; // 体内光斑
-        glm::vec3 glowColor  = {0.35f, 0.95f, 0.30f}; // 底部接触辉光
+        glm::vec3 speckColor = {1.00f, 0.86f, 0.34f}; // 体内金斑（参考图偏金非黄绿）
+        glm::vec3 glowColor  = {0.35f, 0.95f, 0.30f}; // 底部接触辉光 + 体内底部光池
         float     domeScale  = 1.38f;                 // 半球鼓度（盖住剪影侧带，贴合参考图）
-        float     rimGain    = 0.95f;                 // 亮边强度（>1.2 会被 bloom 吹成肥晕）
-        float     specGain   = 1.15f;                 // 湿润高光强度
-        float     ambient    = 0.45f;                 // 环境光基线
+        float     rimGain    = 0.85f;                 // 亮边强度（全透体后轮廓靠边线+bloom；>1.0 晕过肥）
+        float     specGain   = 1.50f;                 // 湿润高光强度（锐点需更亮才可读）
+        float     ambient    = 0.40f;                 // 环境光基线（压低让垂直梯度对比可读）
         float     eyeGain    = 3.0f;                  // 眼 emissive 强度
-        float     speckGain  = 1.8f;                  // 光斑 emissive 强度
-        float     glowGain   = 1.3f;                  // 接触辉光 emissive 强度
+        float     speckGain  = 2.3f;                  // 光斑 emissive 强度
+        float     glowGain   = 1.0f;                  // 接触辉光 emissive 强度（与 core/pool 叠加，>1.2 白洗）
+        float     opacity    = 0.40f;                 // 体内不透明度（透明是"透亮"主体；边缘吸收带回实）
+        float     coreGain   = 1.0f;                  // 内芯发光核强度（暖色主要走乘性梯度，additive 只点睛）
     };
 
     // 场景序列化器 accessor（引擎-only，两 target 共用）。填入宿主 extraSerializers

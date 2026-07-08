@@ -664,6 +664,8 @@ namespace spike01
             t.eyeGain    = c.eyeGain;
             t.speckGain  = c.speckGain;
             t.glowGain   = c.glowGain;
+            t.opacity    = c.opacity;
+            t.coreGain   = c.coreGain;
         }
     }
 

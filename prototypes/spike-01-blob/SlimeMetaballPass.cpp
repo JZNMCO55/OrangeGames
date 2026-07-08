@@ -171,7 +171,7 @@ namespace spike01
         }
 
         // graphics pipeline：空顶点输入（顶点靠 gl_VertexIndex 生成）+ CullMode::None
-        // + 深度双关 + alpha over blend。
+        // + 深度双关 + 预乘 alpha over blend。
         Rhi::GraphicsPipelineDesc gp{};
         gp.mShaderStages.push_back({Rhi::ShaderStage::Vertex, mVs->GetModule(), "main"});
         gp.mShaderStages.push_back({Rhi::ShaderStage::Fragment, mFs->GetModule(), "main"});
@@ -182,8 +182,9 @@ namespace spike01
 
         Rhi::ColorBlendAttachmentDesc blend{};
         blend.mBlendEnable         = true;
-        blend.mSrcColorBlendFactor = Rhi::BlendFactor::SrcAlpha;
-        blend.mDstColorBlendFactor = Rhi::BlendFactor::OneMinusSrcAlpha; // 覆盖式 over
+        // 预乘 alpha（frag 已把体色乘进 alpha）：让"体半透 + 眼/斑加性实亮"共存。
+        blend.mSrcColorBlendFactor = Rhi::BlendFactor::One;
+        blend.mDstColorBlendFactor = Rhi::BlendFactor::OneMinusSrcAlpha;
         blend.mColorBlendOp        = Rhi::BlendOp::Add;
         blend.mSrcAlphaBlendFactor = Rhi::BlendFactor::One;
         blend.mDstAlphaBlendFactor = Rhi::BlendFactor::One;
@@ -269,6 +270,8 @@ namespace spike01
             pUbo->uParams2[2] = mTunables.eyeGain;
             pUbo->uParams2[3] = mTunables.speckGain;
             pUbo->uParams3[0] = mTunables.glowGain;
+            pUbo->uParams3[2] = mTunables.opacity;
+            pUbo->uParams3[3] = mTunables.coreGain;
 
             // 颜色组（顺序与 frag UBO 块对齐：body/deep/rim/eye/speck/glow）。
             const glm::vec3* colors[6] = {&mTunables.bodyColor,  &mTunables.deepColor,

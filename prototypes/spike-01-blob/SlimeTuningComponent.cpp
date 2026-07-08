@@ -14,9 +14,10 @@ namespace spike01
     namespace
     {
 
-        // 1.1：追加视觉字段（颜色 ×6 + 质感 float ×7）；旧 1.0 文件缺字段走组件默认值。
+        // 1.1：追加视觉字段（颜色 ×6 + 质感 float ×7）；1.2：追加 opacity/coreGain
+        // （透光质感）。旧文件缺字段走组件默认值。
         const Orange::Engine::SchemaVersion kSlimeTuningSchemaVersion{
-            "spike01/SlimeTuningComponent", 1, 1};
+            "spike01/SlimeTuningComponent", 1, 2};
 
         // componentPath + "/" + key（如 "components/SlimeTuning" + "jumpSpeed"）。
         std::string Join(std::string_view base, std::string_view key)
@@ -71,6 +72,8 @@ namespace spike01
             writer.WriteFloat(Join(componentPath, "eyeGain"), c->eyeGain);
             writer.WriteFloat(Join(componentPath, "speckGain"), c->speckGain);
             writer.WriteFloat(Join(componentPath, "glowGain"), c->glowGain);
+            writer.WriteFloat(Join(componentPath, "opacity"), c->opacity);
+            writer.WriteFloat(Join(componentPath, "coreGain"), c->coreGain);
         }
 
         bool SlimeTuningRead(const Orange::Engine::JsonReader&         reader,
@@ -132,6 +135,8 @@ namespace spike01
             readFloat("eyeGain", c.eyeGain);
             readFloat("speckGain", c.speckGain);
             readFloat("glowGain", c.glowGain);
+            readFloat("opacity", c.opacity);
+            readFloat("coreGain", c.coreGain);
 
             ctx.world.AddComponent<SlimeTuningComponent>(entity, c);
             return true;
