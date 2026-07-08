@@ -100,6 +100,40 @@ if (SPIKE01_BUILD_SLIME_DLL)
 endif ()
 
 # ===========================================================================
+# Slime.exe —— 史莱姆发布瘦 runtime（PIE M10 级别 1，ADR-021）。
+#
+# RuntimeHost::Run(SlimeGameModule, cfg)：不带编辑器的发布宿主，与 SlimeEditor 的 Play
+# 装配收敛同源（引擎层 PlayAssembly helper）。游戏逻辑全在 SlimeGameModule，main 只填
+# config + seed 世界。只链 OrangeEngine + OrangeRender（不碰 orange_editor）。
+# ===========================================================================
+add_executable(Slime
+    SlimeRuntimeMain.cpp
+    SlimeGameModule.cpp
+    SlimeMetaballPass.cpp
+    SlimeTuningComponent.cpp)
+target_link_libraries(Slime PRIVATE
+    OrangeEngine::orange_engine
+    OrangeRender::orange_render)
+if (MSVC)  # 中文注释源、无 BOM → /utf-8
+    target_compile_options(Slime PRIVATE /utf-8)
+endif ()
+
+# 运行期资产拷到 exe 旁（与 spike-01-blob / SlimeEditor 同款 exe-相对加载）：
+#   * 引擎 builtin shaders（Pipeline）—— OrangeEngine SDK copy-helper
+#   * 史莱姆 SDF pass shaders（fullscreen.vert + slime_metaball.frag → shaders/）
+orange_engine_copy_builtin_shaders(Slime)
+add_custom_command(TARGET Slime POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Slime>/shaders"
+    COMMAND "${SPIKE01_GLSLANG}" -V
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fullscreen.vert"
+            -o "$<TARGET_FILE_DIR:Slime>/shaders/fullscreen.vert.spv"
+    COMMAND "${SPIKE01_GLSLANG}" -V
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/slime_metaball.frag"
+            -o "$<TARGET_FILE_DIR:Slime>/shaders/slime_metaball.frag.spv"
+    VERBATIM
+    COMMENT "Compiling slime_metaball shaders for Slime.exe")
+
+# ===========================================================================
 # SlimeEditor.exe —— 史莱姆 per-game editor（PIE M4，ADR-021）。
 #
 # orange_editor SDK（瘦编辑器宿主）+ SlimeGameModule 注入：编辑器里 Play →
