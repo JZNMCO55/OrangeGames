@@ -279,8 +279,15 @@ namespace spike01
         std::vector<Orange::Engine::Physics::BodyHandle> mLevelBodies;
         std::vector<LevelBox>                            mLevel;
 
-        // Tier2 SDF pass（RegisterRenderPasses 存的借用指针；所有权在 Pipeline）
-        SlimeMetaballPass* mpSdfPass = nullptr;
+        // Tier2 SDF pass（RegisterRenderPasses 存的借用指针；所有权在 Pipeline）。
+        // 编辑器双视口（Scene + Game）会对同一模块按 pipeline 各注册一次，
+        // 单指针会被第二次注册覆盖、饿死第一份 —— 必须 per-pipeline 记账全喂。
+        struct SdfPassEntry
+        {
+            Orange::Engine::Render::Pipeline* pPipeline = nullptr;
+            SlimeMetaballPass*                pPass     = nullptr;
+        };
+        std::vector<SdfPassEntry> mSdfPasses;
 
         SlimeParams mSlime; // Tier1 CPU 史莱姆外观（SDF 关时的 fallback + overlay）
 

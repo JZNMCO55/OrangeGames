@@ -299,9 +299,10 @@ namespace spike01
     void SlimeGameModule::RegisterRenderPasses(Render::Pipeline& pipeline)
     {
         // InsertPass(AfterMainPass)：主 pass + 粒子写完 HDR、bloom 未跑的 hook。
-        // 裸指针存成员供 Tick 喂数据（所有权移交 Pipeline，Edit 态常驻）。
+        // 裸指针按 pipeline 记账供 Tick 喂数据（所有权移交 Pipeline，Edit 态常驻）。
+        // 编辑器双视口对 Scene / Game 两条 pipeline 各调一次本函数。
         auto pass = std::make_unique<SlimeMetaballPass>();
-        mpSdfPass = pass.get();
+        mSdfPasses.push_back({&pipeline, pass.get()});
         pipeline.InsertPass(Render::PipelineStage::AfterMainPass, std::move(pass));
     }
 
@@ -311,7 +312,8 @@ namespace spike01
         // 的 vtable/代码在 slime.dll 内，卸载后 Pipeline 持悬垂 pass 会在 Execute/析构崩。
         // AfterMainPass 上只有本模块 SDF pass（内置 post 走独立机制），清整 stage 安全。
         pipeline.RemovePassesAt(Render::PipelineStage::AfterMainPass);
-        mpSdfPass = nullptr;
+        std::erase_if(mSdfPasses,
+                      [&pipeline](const SdfPassEntry& e) { return e.pPipeline == &pipeline; });
     }
 
     void SlimeGameModule::OnEnterPlay(Game::GameModuleContext& ctx)
@@ -413,10 +415,10 @@ namespace spike01
         // blob 复位到出生点静止起步（避免弹簧从远处猛甩）。
         mBlob.Reset(kSpawn, mBlobParams.blobRadius);
 
-        // SDF pass（若已注册）Play 期启用。
-        if (mpSdfPass)
+        // SDF pass（若已注册）Play 期启用——每个视口 pipeline 一份，全部启用。
+        for (auto& entry : mSdfPasses)
         {
-            mpSdfPass->SetEnabled(true);
+            entry.pPass->SetEnabled(true);
         }
     }
 
@@ -487,13 +489,16 @@ namespace spike01
             mWallJumpFlash = std::max(0.0f, mWallJumpFlash - dt);
         }
 
-        // 把最新 blob 软体喂给 SDF pass（perimeter 世界坐标 + centroid + radius + 时钟）。
-        if (mpSdfPass && mBlob.Initialized())
+        // 把最新 blob 软体喂给全部 SDF pass 实例（perimeter 世界坐标 + centroid + radius + 时钟）。
+        if (!mSdfPasses.empty() && mBlob.Initialized())
         {
             const auto& bp = mBlob.Positions();
-            mpSdfPass->SetBlob(bp.data(), mBlob.PerimeterCount(), mBlob.Centroid(),
-                               mBlobParams.blobRadius);
-            mpSdfPass->SetTime(mRenderTime);
+            for (auto& entry : mSdfPasses)
+            {
+                entry.pPass->SetBlob(bp.data(), mBlob.PerimeterCount(), mBlob.Centroid(),
+                                     mBlobParams.blobRadius);
+                entry.pPass->SetTime(mRenderTime);
+            }
         }
 
         // juice：推进溅射粒子 + 分裂/合并脚本，喂 SDF pass 的 droplet 通道。
@@ -534,9 +539,9 @@ namespace spike01
         mJuiceTimer = 0.0f;
 
         // SDF pass 常驻（GPU 资源不销毁），仅禁用避免 edit 态残留最后一帧史莱姆。
-        if (mpSdfPass)
+        for (auto& entry : mSdfPasses)
         {
-            mpSdfPass->SetEnabled(false);
+            entry.pPass->SetEnabled(false);
         }
 
         mpPhysics  = nullptr;
@@ -1198,11 +1203,11 @@ namespace spike01
             pos.resize(cap);
             rad.resize(cap);
         }
-        if (mpSdfPass)
+        for (auto& entry : mSdfPasses)
         {
-            mpSdfPass->SetDroplets(pos.empty() ? nullptr : pos.data(),
-                                   rad.empty() ? nullptr : rad.data(),
-                                   static_cast<int>(pos.size()));
+            entry.pPass->SetDroplets(pos.empty() ? nullptr : pos.data(),
+                                     rad.empty() ? nullptr : rad.data(),
+                                     static_cast<int>(pos.size()));
         }
     }
 
@@ -1332,7 +1337,8 @@ namespace spike01
             const int   n  = mBlob.PerimeterCount();
 
             // Tier1 CPU gel：SDF pass 开启时接管渲染、跳过此路径（关掉 SDF 恢复）。
-            const bool sdfActive = mpSdfPass && mpSdfPass->IsEnabled();
+            const bool sdfActive =
+                !mSdfPasses.empty() && mSdfPasses.front().pPass->IsEnabled();
             if (mSlime.fill && !sdfActive)
             {
                 std::vector<glm::vec2>       peri(bp.begin(), bp.begin() + n);

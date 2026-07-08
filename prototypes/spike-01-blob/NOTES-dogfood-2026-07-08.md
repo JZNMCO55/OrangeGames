@@ -45,7 +45,41 @@ cmake --build OrangeGames/build-shared --config Release --target slime_game_modu
 
 **验收 = 通过**：改一行手感代码重编 DLL → 编辑器不重启重载再 Play 生效。
 
+## 2026-07-08 下午 · 真机 dogfood 实录（用户特批同 session 跨仓 hotfix）
+
+首次真人交互桌面 dogfood 即抓到 3 个真 bug，全部当日修复 + 验证：
+
+1. **史莱姆双视口不可见（本仓，SlimeGameModule.cpp）**：M9.3 双视口后编辑器对 Scene / Game
+   两条 pipeline 各调一次 `RegisterRenderPasses`，单成员 `mpSdfPass` 被第二次注册覆盖——
+   Scene 视口那份 pass 永远收不到 `SetBlob`/`SetEnabled`，Play 后 Scene 里看不到史莱姆
+   （Game 视口又因 slime 世界无 Camera 组件而空）。M4 dogfood（7/6）早于 M9.3（7/7），
+   五 session 全 headless 没人看 GUI，首次真机即暴露。修复：`mSdfPasses` per-pipeline 记账
+   （`{Pipeline*, Pass*}` 列表），Tick / OnEnterPlay / OnExitPlay / Droplets 喂全部实例，
+   `UnregisterRenderPasses(pipeline)` 只摘对应条目。**static SlimeEditor + SHARED OrangeEditor
+   （DLL 路径）双双真机截图验证绿史莱姆 Play 渲染恢复。**
+2. **SHARED OrangeEditor 真桌面起不来（OrangeRender）**：`orange_engine.dll` 与
+   `orange_render.dll` 各静态持一份 GLFW，render 侧副本未 init → `glfwCreateWindowSurface`
+   返回 -3。上个 session 误归因为"后台会话无窗口"。修法 = OR platform 层 pNativeWindow 双形态
+   （HWND 直走 `vkCreateWin32SurfaceKHR`）+ OE 装配处改传 HWND。见
+   `OrangeRender/docs/incoming_bugs.md` BUG-2026-07-08-shared-topology-glfw-state-split（已归档）。
+3. **SHARED 编辑器首帧虚表错位崩溃（构建拓扑）**：`D:/3rdparty/install` 藏着 2026-05-30 的
+   过期 OrangeRender SDK（pre-c7，`RHIDevice` 33 virtual），与 SHARED 链路的
+   `orange-render-shared`（c7 后，34 virtual）同时暴露在 include 顺序里——个别 TU 编到旧头，
+   虚调用 `GetCapabilities`（新布局 slot 32）打进 slot 31 的 `SerializePipelineCache`，
+   AV 于返回槽写入。修法 = 3rdparty prefix 的 OR 刷到 HEAD（static 链路借此完成拖欠的
+   7bc8c57 → c7-HEAD 消费 bump）+ 全量重编两条链路。**教训：同一依赖绝不允许两个版本同时
+   出现在任何构建的 prefix 集合里；LNK4098（MSVCRTD 混入 Release）同源，一并留意。**
+
+验证矩阵（全绿）：OE static ctest 122/122、OR static ctest 87/87、OG ctest 1/1、
+SHARED OrangeEditor 真机 Play + slime.dll 渲染截图、static SlimeEditor 真机 Play 截图。
+
+**新遗留（已登记 OR incoming_bugs 置顶）**：OR 升 HEAD 后 static Debug 编辑器启动期
+约 1/3 概率 AV（c7 VulkanDedup compute pipeline cache key 路径读到垃圾 shader module 指针，
+`BUG-2026-07-08-compute-pipeline-dedup-startup-av`）；SHARED Release 链未复现，不阻塞热重载主路径。
+
 ## 剩余（非本 dogfood 范畴）
 
-- **game.dll schema 注册通道**（ADR-023 第二条正交硬工作，未做）：DLL slime 的 `SlimeTuningComponent` 在共享 OrangeEditor 下**无 Inspector schema**——schema 现靠 per-game `SlimeEditor` 的 `onRegisterSchemas`，DLL 组件需 `extern "C"` schema 入口 + 卸载前 registry 清空。故本 dogfood 验的是热重载**手感代码**，不含 Inspector 调参。
+- ~~**game.dll schema 注册通道**（ADR-023 第二条正交硬工作，未做）~~ **已落地**（2026-07-08
+  凌晨 session，OE 7c19d7c + OG f67fab9：`extern "C" OrangeRegister/UnregisterEditorSchemas`）；
+  当日下午真机验证共享 OrangeEditor 日志「DLL 游戏模块 schema 已注册（库 0）」。
 - **SlimeEditor.exe 静态备用**（Debug）构建须钉 Debug render SDK：`-DOrangeRender_DIR=D:/3rdparty/install/lib/cmake/OrangeRender`（避 Debug obj 撞 `D:/sdk/orange-render` 的 Release CRT，LNK2038；LNK1319「N mismatches」会掩盖真错，`/INCREMENTAL:NO` 可暴露）。
