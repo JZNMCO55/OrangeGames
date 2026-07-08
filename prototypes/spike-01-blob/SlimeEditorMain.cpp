@@ -14,6 +14,8 @@
 #include "SlimeTuningComponent.h"
 #include "SlimeTuningSchema.h"
 
+#include <schema/ComponentSchemaRegistry.h> // 静态宿主注册进编辑器全局 Instance()
+
 #include <orange/engine/scene/NameComponent.h>
 #include <orange/engine/scene/TransformComponent.h>
 #include <orange/engine/scene/World.h>
@@ -34,7 +36,9 @@ int main(int argc, char** argv)
     cfg.modules.push_back(std::make_unique<spike01::SlimeGameModule>());
 
     // Inspector schema：让 SlimeTuningComponent 能画字段 + "+ Add Component" 菜单可加。
-    cfg.onRegisterSchemas = [] { spike01::RegisterSlimeTuningSchema(); };
+    // 静态宿主注册进编辑器全局 Instance()（DLL 宿主走 slime.dll 导出的 schema proc）。
+    cfg.onRegisterSchemas = []
+    { spike01::RegisterSlimeTuningSchemaInto(Orange::Editor::Schema::ComponentSchemaRegistry::Instance()); };
 
     // Edit 世界 seed：一个名为 "Slime" 的实体，带默认手感 SlimeTuningComponent。
     // 用户在 Entity Tree 选中它 → Inspector 拖手感字段 → Play 时 SlimeGameModule

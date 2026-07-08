@@ -60,15 +60,28 @@ add_custom_command(TARGET spike-01-blob POST_BUILD
 # ===========================================================================
 option(SPIKE01_BUILD_SLIME_DLL "构建 slime.dll 游戏模块（PIE M7 DLL 宿主；需 SHARED 引擎 SDK）" OFF)
 if (SPIKE01_BUILD_SLIME_DLL)
+    # M7 §②：schema 注册通道让 slime.dll 里的 SlimeTuningComponent 在共享 OrangeEditor
+    # 被 Inspector authoring。SlimeTuningSchema.cpp + SlimeSchemaDllExport.cpp 需要编辑器
+    # 头树（ComponentSchemaBuilder / ComponentSchemaRegistry）——但**不链** orange_editor
+    # lib（Register/Find/Unregister 已 header inline，schema 只用 inline/模板代码 + 编辑器
+    # 传入的 registry 引用，零编辑器 lib 符号），只借其 INTERFACE 头路径，避免把整份编辑器
+    # 嵌进 slime.dll。
+    find_package(OrangeEditor 1.3 CONFIG REQUIRED)
+
     add_library(slime_game_module MODULE
         SlimeGameModule.cpp
         SlimeMetaballPass.cpp
         SlimeTuningComponent.cpp
+        SlimeTuningSchema.cpp
+        SlimeSchemaDllExport.cpp
         SlimeGameModuleDllExport.cpp)
     set_target_properties(slime_game_module PROPERTIES OUTPUT_NAME "slime")
     target_link_libraries(slime_game_module PRIVATE
         OrangeEngine::orange_engine
         OrangeRender::orange_render)
+    # 只借编辑器头路径（schema 头树），不链 orange_editor lib。
+    target_include_directories(slime_game_module PRIVATE
+        $<TARGET_PROPERTY:OrangeEditor::orange_editor,INTERFACE_INCLUDE_DIRECTORIES>)
     if (MSVC)  # 中文注释源、无 BOM → /utf-8
         target_compile_options(slime_game_module PRIVATE /utf-8)
     endif ()

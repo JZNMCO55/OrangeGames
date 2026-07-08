@@ -1,6 +1,9 @@
 // SlimeTuningComponent 的 Inspector schema 注册（editor-only，照 HealthComponent 模式）。
 // Range/DragSpeed 给每个手感字段 slider 上下限 + 拖拽步进；Addable/Removable 挂
 // component 级 +Add / 右键移除。
+//
+// builder 链是单一真相源（RegisterSlimeTuningSchemaInto），SlimeEditor 静态宿主与
+// slime.dll DLL 宿主两条路径共用——只是注册进哪个 registry 不同（见 SlimeTuningSchema.h）。
 
 #include "SlimeTuningSchema.h"
 #include "SlimeTuningComponent.h"
@@ -10,7 +13,7 @@
 namespace spike01
 {
 
-    void RegisterSlimeTuningSchema()
+    void RegisterSlimeTuningSchemaInto(Orange::Editor::Schema::ComponentSchemaRegistry& reg)
     {
         using namespace Orange::Editor::Schema;
 
@@ -32,7 +35,12 @@ namespace spike01
             .DragSpeed(0.5f)
             .Addable()
             .Removable()
-            .Register();
+            .RegisterInto(reg);
+    }
+
+    void UnregisterSlimeTuningSchema(Orange::Editor::Schema::ComponentSchemaRegistry& reg)
+    {
+        reg.Unregister<SlimeTuningComponent>();
     }
 
 } // namespace spike01
