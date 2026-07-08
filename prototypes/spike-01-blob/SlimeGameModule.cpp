@@ -444,14 +444,9 @@ namespace spike01
             ctx.pWorld->AddComponent<Render::Camera>(mCamEntity, cam);
         }
 
-        // Play 期暗场背景：参考图的 gel 质感靠黑底 + bloom，亮天空会把 emissive
-        // 洗掉。不在 OnExitPlay 还原——编辑器回 Edit 后每帧重申 sky / 清屏色，
-        // runtime 宿主则本就应保持游戏背景。
-        for (auto& entry : mSdfPasses)
-        {
-            entry.pPipeline->SetSkyEnabled(false);
-            entry.pPipeline->SetSceneClearColor(0.012f, 0.020f, 0.016f);
-        }
+        // （原"Play 期暗场背景"硬编码已删：模块不再劫持 sky / 清屏色，背景交给
+        // 场景的 EnvironmentComponent 决定——用户拍板天空盒随场景进 Play。暗场
+        // 需求由"场景不挂环境组件"自然表达。）
     }
 
     void SlimeGameModule::Tick(Game::GameModuleContext& ctx, float dt)

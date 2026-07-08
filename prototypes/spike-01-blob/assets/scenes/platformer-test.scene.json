@@ -1,0 +1,746 @@
+{
+  "entities": [
+    {
+      "components": {
+        "Environment": {
+          "cubemap": "project://assets/environments/preller_drive_1k.hdr",
+          "intensity": 1.0,
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Guid": {
+          "value": "aa000000000000000000000000000001"
+        },
+        "Name": {
+          "name": "Environment"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 0
+    },
+    {
+      "components": {
+        "DirectionalLight": {
+          "castsShadow": true,
+          "color": [
+            0.550000011920929,
+            0.6200000047683716,
+            0.8500000238418579
+          ],
+          "intensity": 1.5
+        },
+        "Guid": {
+          "value": "aa000000000000000000000000000002"
+        },
+        "Name": {
+          "name": "Moon"
+        },
+        "Transform": {
+          "position": [
+            6.0,
+            8.0,
+            5.0
+          ],
+          "rotation": [
+            0.34077996015548706,
+            0.07897419482469559,
+            0.16493844985961914,
+            0.9221861958503723
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 1
+    },
+    {
+      "components": {
+        "Camera": {
+          "projection": [
+            1.3254318237304688,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -2.4142134189605713,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -1.001001000404358,
+            -1.0,
+            0.0,
+            0.0,
+            -0.10010010004043579,
+            0.0
+          ],
+          "view": [
+            1.0,
+            0.0,
+            -0.0,
+            0.0,
+            -0.0,
+            0.9820043444633484,
+            0.18885891139507294,
+            0.0,
+            0.0,
+            -0.18885891139507294,
+            0.9820043444633484,
+            0.0,
+            -0.0,
+            -0.4910022020339966,
+            -8.244429588317871,
+            1.0
+          ]
+        },
+        "Guid": {
+          "value": "aa000000000000000000000000000003"
+        },
+        "Name": {
+          "name": "Camera"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 2
+    },
+    {
+      "components": {
+        "Collider": {
+          "categoryBits": 1,
+          "density": 0.0,
+          "friction": 0.6000000238418579,
+          "isSensor": false,
+          "maskBits": 4294967295,
+          "restitution": 0.0,
+          "shape": {
+            "center": [
+              0.0,
+              0.0
+            ],
+            "halfExtents": [
+              9.0,
+              0.25
+            ],
+            "kind": "Box"
+          }
+        },
+        "Guid": {
+          "value": "aa000000000000000000000000000010"
+        },
+        "Name": {
+          "name": "Ground"
+        },
+        "Renderable": {
+          "castsShadow": true,
+          "materialInstanceId": "project://assets/materials/builtin/pbr.material",
+          "mesh": "project://assets/meshes/cube.mesh",
+          "visible": true
+        },
+        "RigidBody": {
+          "angularDamping": 0.0,
+          "fixedRotation": true,
+          "gravityScale": 0.0,
+          "initialAngle": 0.0,
+          "initialPosition": [
+            0.0,
+            -3.25
+          ],
+          "linearDamping": 0.0,
+          "type": "Static"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            -3.25,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            18.0,
+            0.5,
+            2.0
+          ]
+        }
+      },
+      "id": 3
+    },
+    {
+      "components": {
+        "Collider": {
+          "categoryBits": 1,
+          "density": 0.0,
+          "friction": 0.6000000238418579,
+          "isSensor": false,
+          "maskBits": 4294967295,
+          "restitution": 0.0,
+          "shape": {
+            "center": [
+              0.0,
+              0.0
+            ],
+            "halfExtents": [
+              1.75,
+              0.10000000149011612
+            ],
+            "kind": "Box"
+          }
+        },
+        "Guid": {
+          "value": "aa000000000000000000000000000011"
+        },
+        "Name": {
+          "name": "Platform L"
+        },
+        "Renderable": {
+          "castsShadow": true,
+          "materialInstanceId": "project://assets/materials/builtin/pbr.material",
+          "mesh": "project://assets/meshes/cube.mesh",
+          "visible": true
+        },
+        "RigidBody": {
+          "angularDamping": 0.0,
+          "fixedRotation": true,
+          "gravityScale": 0.0,
+          "initialAngle": 0.0,
+          "initialPosition": [
+            -4.25,
+            -0.6000000238418579
+          ],
+          "linearDamping": 0.0,
+          "type": "Static"
+        },
+        "Transform": {
+          "position": [
+            -4.25,
+            -0.6000000238418579,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            3.5,
+            0.20000000298023224,
+            1.2000000476837158
+          ]
+        }
+      },
+      "id": 4
+    },
+    {
+      "components": {
+        "Collider": {
+          "categoryBits": 1,
+          "density": 0.0,
+          "friction": 0.6000000238418579,
+          "isSensor": false,
+          "maskBits": 4294967295,
+          "restitution": 0.0,
+          "shape": {
+            "center": [
+              0.0,
+              0.0
+            ],
+            "halfExtents": [
+              1.75,
+              0.10000000149011612
+            ],
+            "kind": "Box"
+          }
+        },
+        "Guid": {
+          "value": "aa000000000000000000000000000012"
+        },
+        "Name": {
+          "name": "Platform R"
+        },
+        "Renderable": {
+          "castsShadow": true,
+          "materialInstanceId": "project://assets/materials/builtin/pbr.material",
+          "mesh": "project://assets/meshes/cube.mesh",
+          "visible": true
+        },
+        "RigidBody": {
+          "angularDamping": 0.0,
+          "fixedRotation": true,
+          "gravityScale": 0.0,
+          "initialAngle": 0.0,
+          "initialPosition": [
+            4.25,
+            0.4000000059604645
+          ],
+          "linearDamping": 0.0,
+          "type": "Static"
+        },
+        "Transform": {
+          "position": [
+            4.25,
+            0.4000000059604645,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            3.5,
+            0.20000000298023224,
+            1.2000000476837158
+          ]
+        }
+      },
+      "id": 5
+    },
+    {
+      "components": {
+        "Collider": {
+          "categoryBits": 1,
+          "density": 0.0,
+          "friction": 0.6000000238418579,
+          "isSensor": false,
+          "maskBits": 4294967295,
+          "restitution": 0.0,
+          "shape": {
+            "center": [
+              0.0,
+              0.0
+            ],
+            "halfExtents": [
+              0.07500000298023224,
+              2.6500000953674316
+            ],
+            "kind": "Box"
+          }
+        },
+        "Guid": {
+          "value": "aa000000000000000000000000000013"
+        },
+        "Name": {
+          "name": "Chimney Wall L"
+        },
+        "Renderable": {
+          "castsShadow": true,
+          "materialInstanceId": "project://assets/materials/builtin/pbr.material",
+          "mesh": "project://assets/meshes/cube.mesh",
+          "visible": true
+        },
+        "RigidBody": {
+          "angularDamping": 0.0,
+          "fixedRotation": true,
+          "gravityScale": 0.0,
+          "initialAngle": 0.0,
+          "initialPosition": [
+            -0.7749999761581421,
+            1.350000023841858
+          ],
+          "linearDamping": 0.0,
+          "type": "Static"
+        },
+        "Transform": {
+          "position": [
+            -0.7749999761581421,
+            1.350000023841858,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            0.15000000596046448,
+            5.300000190734863,
+            1.2000000476837158
+          ]
+        }
+      },
+      "id": 6
+    },
+    {
+      "components": {
+        "Collider": {
+          "categoryBits": 1,
+          "density": 0.0,
+          "friction": 0.6000000238418579,
+          "isSensor": false,
+          "maskBits": 4294967295,
+          "restitution": 0.0,
+          "shape": {
+            "center": [
+              0.0,
+              0.0
+            ],
+            "halfExtents": [
+              0.07500000298023224,
+              3.5
+            ],
+            "kind": "Box"
+          }
+        },
+        "Guid": {
+          "value": "aa000000000000000000000000000014"
+        },
+        "Name": {
+          "name": "Chimney Wall R"
+        },
+        "Renderable": {
+          "castsShadow": true,
+          "materialInstanceId": "project://assets/materials/builtin/pbr.material",
+          "mesh": "project://assets/meshes/cube.mesh",
+          "visible": true
+        },
+        "RigidBody": {
+          "angularDamping": 0.0,
+          "fixedRotation": true,
+          "gravityScale": 0.0,
+          "initialAngle": 0.0,
+          "initialPosition": [
+            0.7749999761581421,
+            0.5
+          ],
+          "linearDamping": 0.0,
+          "type": "Static"
+        },
+        "Transform": {
+          "position": [
+            0.7749999761581421,
+            0.5,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            0.15000000596046448,
+            7.0,
+            1.2000000476837158
+          ]
+        }
+      },
+      "id": 7
+    },
+    {
+      "components": {
+        "Collider": {
+          "categoryBits": 1,
+          "density": 0.0,
+          "friction": 0.6000000238418579,
+          "isSensor": false,
+          "maskBits": 4294967295,
+          "restitution": 0.0,
+          "shape": {
+            "center": [
+              0.0,
+              0.0
+            ],
+            "halfExtents": [
+              1.0750000476837158,
+              0.10000000149011612
+            ],
+            "kind": "Box"
+          }
+        },
+        "Guid": {
+          "value": "aa000000000000000000000000000015"
+        },
+        "Name": {
+          "name": "Mantle Platform"
+        },
+        "Renderable": {
+          "castsShadow": true,
+          "materialInstanceId": "project://assets/materials/builtin/pbr.material",
+          "mesh": "project://assets/meshes/cube.mesh",
+          "visible": true
+        },
+        "RigidBody": {
+          "angularDamping": 0.0,
+          "fixedRotation": true,
+          "gravityScale": 0.0,
+          "initialAngle": 0.0,
+          "initialPosition": [
+            1.9249999523162842,
+            3.9000000953674316
+          ],
+          "linearDamping": 0.0,
+          "type": "Static"
+        },
+        "Transform": {
+          "position": [
+            1.9249999523162842,
+            3.9000000953674316,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            2.1500000953674316,
+            0.20000000298023224,
+            1.2000000476837158
+          ]
+        }
+      },
+      "id": 8
+    },
+    {
+      "components": {
+        "Collider": {
+          "categoryBits": 1,
+          "density": 0.0,
+          "friction": 0.6000000238418579,
+          "isSensor": false,
+          "maskBits": 4294967295,
+          "restitution": 0.0,
+          "shape": {
+            "center": [
+              0.0,
+              0.0
+            ],
+            "halfExtents": [
+              0.05000000074505806,
+              1.0
+            ],
+            "kind": "Box"
+          }
+        },
+        "Guid": {
+          "value": "aa000000000000000000000000000016"
+        },
+        "Name": {
+          "name": "Squeeze Wall L"
+        },
+        "Renderable": {
+          "castsShadow": true,
+          "materialInstanceId": "project://assets/materials/builtin/pbr.material",
+          "mesh": "project://assets/meshes/cube.mesh",
+          "visible": true
+        },
+        "RigidBody": {
+          "angularDamping": 0.0,
+          "fixedRotation": true,
+          "gravityScale": 0.0,
+          "initialAngle": 0.0,
+          "initialPosition": [
+            6.550000190734863,
+            -2.0
+          ],
+          "linearDamping": 0.0,
+          "type": "Static"
+        },
+        "Transform": {
+          "position": [
+            6.550000190734863,
+            -2.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            0.10000000149011612,
+            2.0,
+            1.2000000476837158
+          ]
+        }
+      },
+      "id": 9
+    },
+    {
+      "components": {
+        "Collider": {
+          "categoryBits": 1,
+          "density": 0.0,
+          "friction": 0.6000000238418579,
+          "isSensor": false,
+          "maskBits": 4294967295,
+          "restitution": 0.0,
+          "shape": {
+            "center": [
+              0.0,
+              0.0
+            ],
+            "halfExtents": [
+              0.05000000074505806,
+              1.0
+            ],
+            "kind": "Box"
+          }
+        },
+        "Guid": {
+          "value": "aa000000000000000000000000000017"
+        },
+        "Name": {
+          "name": "Squeeze Wall R"
+        },
+        "Renderable": {
+          "castsShadow": true,
+          "materialInstanceId": "project://assets/materials/builtin/pbr.material",
+          "mesh": "project://assets/meshes/cube.mesh",
+          "visible": true
+        },
+        "RigidBody": {
+          "angularDamping": 0.0,
+          "fixedRotation": true,
+          "gravityScale": 0.0,
+          "initialAngle": 0.0,
+          "initialPosition": [
+            7.349999904632568,
+            -2.0
+          ],
+          "linearDamping": 0.0,
+          "type": "Static"
+        },
+        "Transform": {
+          "position": [
+            7.349999904632568,
+            -2.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            0.10000000149011612,
+            2.0,
+            1.2000000476837158
+          ]
+        }
+      },
+      "id": 10
+    },
+    {
+      "components": {
+        "Collider": {
+          "categoryBits": 1,
+          "density": 0.0,
+          "friction": 0.6000000238418579,
+          "isSensor": false,
+          "maskBits": 4294967295,
+          "restitution": 0.0,
+          "shape": {
+            "center": [
+              0.0,
+              0.0
+            ],
+            "halfExtents": [
+              0.44999998807907104,
+              0.07500000298023224
+            ],
+            "kind": "Box"
+          }
+        },
+        "Guid": {
+          "value": "aa000000000000000000000000000018"
+        },
+        "Name": {
+          "name": "Tunnel Cap"
+        },
+        "Renderable": {
+          "castsShadow": true,
+          "materialInstanceId": "project://assets/materials/builtin/pbr.material",
+          "mesh": "project://assets/meshes/cube.mesh",
+          "visible": true
+        },
+        "RigidBody": {
+          "angularDamping": 0.0,
+          "fixedRotation": true,
+          "gravityScale": 0.0,
+          "initialAngle": 0.0,
+          "initialPosition": [
+            6.949999809265137,
+            -0.925000011920929
+          ],
+          "linearDamping": 0.0,
+          "type": "Static"
+        },
+        "Transform": {
+          "position": [
+            6.949999809265137,
+            -0.925000011920929,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            0.8999999761581421,
+            0.15000000596046448,
+            1.2000000476837158
+          ]
+        }
+      },
+      "id": 11
+    }
+  ],
+  "schemaVersion": {
+    "major": 1,
+    "minor": 20,
+    "namespace": "scene/world"
+  }
+}
