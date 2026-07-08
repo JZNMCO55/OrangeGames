@@ -10,7 +10,11 @@
 //   * 进模块 = 玩法装配：control point body + 关卡静态 body（OnEnterPlay 建、
 //     OnExitPlay 拆）、固定步长自管物理（WantsOwnPhysicsStep=true）、SDF
 //     metaball pass 注册（RegisterRenderPasses）+ 逐帧喂数据（Tick）。
-//   * 留宿主 = 表现装配：相机 / clear color / sky / bloom 链 —— 不进模块。
+//     Play 期表现语义也归模块：2D 游戏相机（OnEnterPlay 建运行态 Camera 实体 +
+//     Tick 跟随，Stop 快照还原回收）与暗场背景（sky 关 + 深绿清屏，参考图质感
+//     靠黑底 + bloom）——宿主无从知道 2D 机位该怎么摆。
+//   * 留宿主 = 表现装配：bloom 链 / resize / Edit 态相机与背景 —— 不进模块
+//    （编辑器回 Edit 后每帧重申自动还原）。
 //
 // 与 spike 的差异：
 //   * 去掉 Layer::OnImGui（IGameModule 无调参段；手感参数保持内置成员默认值，
@@ -26,6 +30,7 @@
 #include <orange/engine/game/IGameModule.h>
 #include <orange/engine/input/InputContext.h>
 #include <orange/engine/physics/BodyHandle.h>
+#include <orange/engine/scene/Entity.h>
 
 #include "Blob.h"
 
@@ -270,6 +275,13 @@ namespace spike01
         //（OnEnterPlay 在建 body / Blob.Reset 之前调；无组件 / 无 World 则维持默认）。
         void ApplyTuningOverrides(Orange::Engine::World* pWorld);
 
+        // Play 期 2D 相机跟随：指数平滑追 blob 质心（Tick 每帧调）。
+        void UpdateGameCamera(Orange::Engine::World* pWorld, float dt);
+
+        // 视觉参数每帧重读（schema 标 PlaySafe 的颜色 / gel 旋钮 Play 期实时生效；
+        // 手感字段仍走 OnEnterPlay 一次性 ApplyTuningOverrides）。
+        void ApplyVisualTuning(Orange::Engine::World* pWorld);
+
         // —— 宿主经 GameModuleContext 传入的引擎引用（OnEnterPlay 存、Tick 复用）——
         Orange::Engine::Physics::PhysicsWorld* mpPhysics  = nullptr;
         Orange::Engine::Render::Pipeline*      mpPipeline = nullptr;
@@ -288,6 +300,10 @@ namespace spike01
             SlimeMetaballPass*                pPass     = nullptr;
         };
         std::vector<SdfPassEntry> mSdfPasses;
+
+        // Play 期 2D 游戏相机（运行态实体：OnEnterPlay 建、OnExitPlay/快照还原回收）
+        Orange::Engine::Entity mCamEntity{};
+        glm::vec2              mCamFocus{0.0f};
 
         SlimeParams mSlime; // Tier1 CPU 史莱姆外观（SDF 关时的 fallback + overlay）
 

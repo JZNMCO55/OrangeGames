@@ -270,6 +270,17 @@ namespace spike01
             pUbo->uParams2[3] = mTunables.speckGain;
             pUbo->uParams3[0] = mTunables.glowGain;
 
+            // 颜色组（顺序与 frag UBO 块对齐：body/deep/rim/eye/speck/glow）。
+            const glm::vec3* colors[6] = {&mTunables.bodyColor,  &mTunables.deepColor,
+                                          &mTunables.rimColor,   &mTunables.eyeColor,
+                                          &mTunables.speckColor, &mTunables.glowColor};
+            for (int c = 0; c < 6; ++c)
+            {
+                pUbo->uColors[c][0] = colors[c]->r;
+                pUbo->uColors[c][1] = colors[c]->g;
+                pUbo->uColors[c][2] = colors[c]->b;
+            }
+
             for (int i = 0; i < n; ++i)
             {
                 pUbo->uPoints[i][0] = mPerimeterWorld[i].x;

@@ -1,6 +1,7 @@
 // spike-01-blob —— SlimeGameModule 实现（原 main.cpp SpikeLayer 全部玩法逻辑）。
 // 引擎引用经 GameModuleContext 传入（mpPhysics / mpPipeline）；宿主管渲染 / resize /
-// 相机 / bloom。Blob.h + SlimeMetaballPass.h 原地复用。
+// bloom；Play 期 2D 相机与暗场背景归模块（见头文件分工注释）。Blob.h +
+// SlimeMetaballPass.h 原地复用。
 
 #include "SlimeGameModule.h"
 #include "SlimeMetaballPass.h"
@@ -11,6 +12,8 @@
 #include <orange/engine/physics.h>
 #include <orange/engine/platform.h>
 #include <orange/engine/render.h>
+#include <orange/engine/scene/NameComponent.h>      // Play 期相机实体在 Entity Tree 可辨识
+#include <orange/engine/scene/TransformComponent.h>
 #include <orange/engine/scene/World.h> // ApplyTuningOverrides 遍历 entt view
 
 #include <glm/glm.hpp>
@@ -420,11 +423,39 @@ namespace spike01
         {
             entry.pPass->SetEnabled(true);
         }
+
+        // Play 期 2D 游戏相机：正交机位对齐 standalone showcase framing（halfH 1.9
+        // @16:9，沿 -Z 正视 XY 平面）。运行态实体——编辑器 Stop 快照还原回收、
+        // Edit 世界保持无相机（Scene 视口回编辑器 3D 轨道相机）。
+        if (ctx.pWorld != nullptr)
+        {
+            mCamFocus  = kSpawn;
+            mCamEntity = ctx.pWorld->CreateEntity();
+            ctx.pWorld->AddComponent<Scene::TransformComponent>(mCamEntity,
+                                                                Scene::TransformComponent{});
+            ctx.pWorld->AddComponent<Scene::NameComponent>(mCamEntity,
+                                                           Scene::NameComponent{"GameCamera (Play)"});
+            const float halfH = 1.9f;
+            const float halfW = halfH * (16.0f / 9.0f);
+            auto cam = Render::Camera::Orthographic(-halfW, halfW, -halfH, halfH, 0.1f, 100.0f);
+            const glm::vec3 focus(kSpawn, 0.0f);
+            cam.view = glm::lookAt(focus + glm::vec3(0.0f, 0.0f, 10.0f), focus,
+                                   glm::vec3(0.0f, 1.0f, 0.0f));
+            ctx.pWorld->AddComponent<Render::Camera>(mCamEntity, cam);
+        }
+
+        // Play 期暗场背景：参考图的 gel 质感靠黑底 + bloom，亮天空会把 emissive
+        // 洗掉。不在 OnExitPlay 还原——编辑器回 Edit 后每帧重申 sky / 清屏色，
+        // runtime 宿主则本就应保持游戏背景。
+        for (auto& entry : mSdfPasses)
+        {
+            entry.pPipeline->SetSkyEnabled(false);
+            entry.pPipeline->SetSceneClearColor(0.012f, 0.020f, 0.016f);
+        }
     }
 
     void SlimeGameModule::Tick(Game::GameModuleContext& ctx, float dt)
     {
-        (void)ctx; // 引擎引用已在 OnEnterPlay 存为 mpPhysics / mpPipeline
         if (!mpPhysics)
         {
             return;
@@ -504,6 +535,10 @@ namespace spike01
         // juice：推进溅射粒子 + 分裂/合并脚本，喂 SDF pass 的 droplet 通道。
         UpdateDroplets(dt);
 
+        // 2D 游戏相机跟随（blob 质心为焦点）+ 视觉参数实时重读（PlaySafe 字段）。
+        UpdateGameCamera(ctx.pWorld, dt);
+        ApplyVisualTuning(ctx.pWorld);
+
         DrawDebug();
         // 宿主负责 Render —— 本模块不调 Pipeline::Render。
 
@@ -544,6 +579,14 @@ namespace spike01
             entry.pPass->SetEnabled(false);
         }
 
+        // Play 期相机实体：编辑器路径快照还原会回收，但 runtime 宿主无快照——
+        // 显式销毁保证两宿主一致（编辑器下重复销毁无害，快照还原先行即不 valid）。
+        if (mCamEntity.IsValid() && ctx.pWorld != nullptr)
+        {
+            ctx.pWorld->DestroyEntity(mCamEntity);
+        }
+        mCamEntity = {};
+
         mpPhysics  = nullptr;
         mpPipeline = nullptr;
     }
@@ -571,6 +614,57 @@ namespace spike01
             GetSlimeTuningSerializerEntry(),
         };
         return kEntries;
+    }
+
+    void SlimeGameModule::UpdateGameCamera(World* pWorld, float dt)
+    {
+        if (pWorld == nullptr || !mCamEntity.IsValid())
+        {
+            return;
+        }
+        auto* cam = pWorld->GetComponent<Render::Camera>(mCamEntity);
+        if (cam == nullptr)
+        {
+            return;
+        }
+        // 指数平滑跟随（帧率无关）。焦点取 blob 质心（软体视觉重心）而非 control
+        // point——果冻滞后感由 blob 本身提供，相机不再叠加弹性。
+        const glm::vec2 target = mBlob.Initialized() ? mBlobCentroid : mCpState.position;
+        mCamFocus += (target - mCamFocus) * (1.0f - std::exp(-6.0f * dt));
+        const glm::vec3 focus(mCamFocus, 0.0f);
+        cam->view = glm::lookAt(focus + glm::vec3(0.0f, 0.0f, 10.0f), focus,
+                                glm::vec3(0.0f, 1.0f, 0.0f));
+    }
+
+    void SlimeGameModule::ApplyVisualTuning(World* pWorld)
+    {
+        if (pWorld == nullptr || mSdfPasses.empty())
+        {
+            return;
+        }
+        auto view = pWorld->Registry().view<SlimeTuningComponent>();
+        if (view.begin() == view.end())
+        {
+            return;
+        }
+        const auto& c = view.get<SlimeTuningComponent>(*view.begin());
+        for (auto& entry : mSdfPasses)
+        {
+            auto& t      = entry.pPass->GetTunables();
+            t.bodyColor  = c.bodyColor;
+            t.deepColor  = c.deepColor;
+            t.rimColor   = c.rimColor;
+            t.eyeColor   = c.eyeColor;
+            t.speckColor = c.speckColor;
+            t.glowColor  = c.glowColor;
+            t.domeScale  = c.domeScale;
+            t.rimGain    = c.rimGain;
+            t.specGain   = c.specGain;
+            t.ambient    = c.ambient;
+            t.eyeGain    = c.eyeGain;
+            t.speckGain  = c.speckGain;
+            t.glowGain   = c.glowGain;
+        }
     }
 
     void SlimeGameModule::ApplyTuningOverrides(World* pWorld)

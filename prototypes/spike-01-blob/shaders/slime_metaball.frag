@@ -20,17 +20,24 @@ layout(std140, set = 0, binding = 0) uniform SlimeUBO
     vec4 uParams1;    // x=blobNdcRadius, y=domeScale, z=rimGain, w=specGain
     vec4 uParams2;      // x=ambient, y=time, z=eyeGain, w=speckGain
     vec4 uParams3;      // x=glowGain, y=dropletCount
+    vec4 uBodyColor;    // rgb（颜色组顺序与 C++ SlimeUbo.uColors 对齐：body/deep/rim/eye/speck/glow）
+    vec4 uDeepColor;
+    vec4 uRimColor;
+    vec4 uEyeColor;
+    vec4 uSpeckColor;
+    vec4 uGlowColor;
     vec4 uPoints[16];   // xy=world pos（末尾一个是 centroid）
     vec4 uDroplets[8];  // juice 额外 metaball 点：xy=world pos, z=falloff(ndc-y), w=intensity
 } U;
 
-// gel 材质常量 —— 迁移自 main.cpp Tier1 SlimeParams（准确值）。
-const vec3  kDeepColor  = vec3(0.02, 0.16, 0.05);  // 厚处深绿（核心 / SSS 暗端）
-const vec3  kBodyColor  = vec3(0.11, 0.62, 0.20);  // 主体绿（薄处 / 边亮端）
-const vec3  kRimColor   = vec3(0.55, 1.00, 0.55);  // Fresnel 亮边（黄绿）
-const vec3  kEyeColor   = vec3(1.00, 0.92, 0.45);  // 发光眼（暖黄）
-const vec3  kSpeckColor = vec3(0.85, 1.00, 0.42);  // 体内光斑
-const vec3  kGlowColor  = vec3(0.18, 0.85, 0.28);  // 底部接触辉光
+// gel 颜色经 UBO 传入（SlimeTuningComponent 可调，默认 = 参考图校准值）；
+// 宏别名保持下方使用点原样。
+#define kBodyColor  (U.uBodyColor.rgb)
+#define kDeepColor  (U.uDeepColor.rgb)
+#define kRimColor   (U.uRimColor.rgb)
+#define kEyeColor   (U.uEyeColor.rgb)
+#define kSpeckColor (U.uSpeckColor.rgb)
+#define kGlowColor  (U.uGlowColor.rgb)
 const vec3  kLightDir   = vec3(-0.35, 0.85, 0.42); // 主光方向（左上偏前，y-up）
 const float kRimPower   = 3.0;
 const float kSpecPower  = 32.0;
